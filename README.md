@@ -67,6 +67,18 @@ src/test/            fixture XML + parser/ingest/route tests (bun test)
 scripts/seed-fixture.ts   load the test fixture into the database
 ```
 
+## Troubleshooting
+
+**`Failed to load external module better-sqlite3-<hash>: Cannot find module ...`** — the dev server
+can't load the native sqlite module; that message is only ever a symptom of a broken install, not of
+code. `bun run dev` now checks this up front (`scripts/check-native.ts`) and prints the platform,
+prebuilds and lockfiles it found. Fix by reinstalling cleanly **with bun** — mixing npm/pnpm/yarn
+lockfiles leaves a `node_modules` layout Turbopack cannot resolve native modules from:
+
+```bash
+rm -rf node_modules .next && bun install && bun run dev
+```
+
 ## Verify
 
 ```bash
