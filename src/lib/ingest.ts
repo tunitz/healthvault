@@ -1,23 +1,63 @@
 import { Unzip, UnzipInflate } from "fflate";
 import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { activitySummaries, records, uploads, workouts } from "@/db/schema";
-import { createHealthParser } from "@/lib/xml";
+import { db, sqlite } from "@/db";
+import { uploads } from "@/db/schema";
+import { createHealthParser, type HealthRecordRow, type SummaryRow, type WorkoutRow } from "@/lib/xml";
 
 export type IngestResult = { uploadId: number; inserted: number; duplicates: number };
 
-const CHUNK = Number(process.env.INGEST_CHUNK ?? 1000);          // rows per INSERT statement
-const ZIP_SLICE = Number(process.env.INGEST_SLICE ?? 1 << 20);   // zip bytes pushed into the inflater at a time
-const DEBUG = process.env.INGEST_DEBUG === "1";
-
-function* chunks<T>(arr: T[], n: number): Generator<T[]> {
-  for (let i = 0; i < arr.length; i += n) yield arr.slice(i, i + n);
-}
+const CHUNK = Number(process.env.INGEST_CHUNK ?? 1000);
+const ZIP_SLICE = Number(process.env.INGEST_SLICE ?? 1 << 20);
 
 /**
- * Streaming unzip: yields the bytes of `export.xml` as they are inflated, so peak memory
- * stays near the compressed size instead of the tens-to-hundreds of MB of XML.
+ * Inserts go through raw prepared statements, not the query builder.
+ *
+ * Why: the builder rebuilds a statement with CHUNK x N placeholders for every batch and
+ * `.returning()` materialises a row object per insert. On a 910k-row export that is ~900
+ * builds and ~910k throwaway objects, which dominated both runtime and peak memory.
+ * Prepared statements are compiled once; `changes` reports what actually landed, so the
+ * duplicate count falls out without RETURNING.
  */
+const insertRecord = sqlite.prepare(
+  `INSERT INTO records (type_identifier, unit, value, start_date, start_ms, day, end_date, end_ms, source_name)
+   VALUES (@typeIdentifier, @unit, @value, @startDate, @startMs, @day, @endDate, @endMs, @sourceName)
+   ON CONFLICT DO NOTHING`,
+);
+const insertWorkout = sqlite.prepare(
+  `INSERT INTO workouts (workout_activity_type, start_date, start_ms, day, end_date, end_ms,
+                         duration_seconds, total_distance, total_distance_unit, total_energy_burned,
+                         total_energy_burned_unit, source_name, metadata_json)
+   VALUES (@workoutActivityType, @startDate, @startMs, @day, @endDate, @endMs,
+           @durationSeconds, @totalDistance, @totalDistanceUnit, @totalEnergyBurned,
+           @totalEnergyBurnedUnit, @sourceName, @metadataJson)
+   ON CONFLICT DO NOTHING`,
+);
+const insertSummary = sqlite.prepare(
+  `INSERT INTO activity_summaries (date_components, day, active_energy_burned, active_energy_burned_goal,
+                                   apple_move_minutes, apple_move_minutes_goal, apple_exercise_time,
+                                   apple_exercise_time_goal, apple_stand_hours, apple_stand_hours_goal)
+   VALUES (@dateComponents, @day, @activeEnergyBurned, @activeEnergyBurnedGoal,
+           @appleMoveMinutes, @appleMoveMinutesGoal, @appleExerciseTime,
+           @appleExerciseTimeGoal, @appleStandHours, @appleStandHoursGoal)
+   ON CONFLICT DO NOTHING`,
+);
+
+// better-sqlite3 rejects `undefined` bindings; SQLite wants NULL for absent fields.
+const orNull = <T extends object>(row: T): T => {
+  const out = { ...row } as Record<string, unknown>;
+  for (const k of Object.keys(out)) if (out[k] === undefined) out[k] = null;
+  return out as T;
+};
+
+/** One transaction per batch: sync (better-sqlite3), so it cannot be awaited mid-way. */
+const writeBatch = sqlite.transaction((records: HealthRecordRow[], workouts: WorkoutRow[], summaries: SummaryRow[]) => {
+  let n = 0;
+  for (const r of records) n += insertRecord.run(r).changes;
+  for (const w of workouts) n += insertWorkout.run(orNull(w)).changes;
+  for (const s of summaries) n += insertSummary.run(orNull(s)).changes;
+  return n;
+});
+
 async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
   const ready: Uint8Array[] = [];
   const seen: string[] = [];
@@ -26,8 +66,6 @@ async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
 
   const unzipper = new Unzip((file) => {
     seen.push(file.name);
-    // Real exports from the iPhone Files app live at `apple_health_export/export.xml`;
-    // older/repacked ones put it at the root. Match on the basename, not the full path.
     if (file.name.toLowerCase().split("/").pop() !== "export.xml") return;
     sawEntry = true;
     file.ondata = (err, chunk) => {
@@ -43,12 +81,10 @@ async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
     unzipper.push(zip.subarray(off, end), end >= zip.length);
     while (ready.length) yield ready.shift()!;
     if (failure) throw failure;
-    await Promise.resolve(); // let the event loop breathe between slices
+    await Promise.resolve();
   }
   if (failure) throw failure;
-  if (!sawEntry) {
-    throw new Error(`export.xml not found in zip (entries: ${seen.slice(0, 10).join(", ") || "none"})`);
-  }
+  if (!sawEntry) throw new Error(`export.xml not found in zip (entries: ${seen.slice(0, 10).join(", ") || "none"})`);
 }
 
 export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: number): Promise<IngestResult> {
@@ -63,41 +99,22 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
     let inserted = 0;
     let seen = 0;
 
-    let flushes = 0;
-    const flush = async () => {
-      flushes++;
+    const flush = () => {
       const parsed = parser.drain();
       seen += parsed.records.length + parsed.workouts.length + parsed.summaries.length;
-      for (const c of chunks(parsed.records, CHUNK)) {
-        inserted += (await db.insert(records).values(c).onConflictDoNothing().returning({ id: records.id })).length;
-      }
-      for (const c of chunks(parsed.workouts, CHUNK)) {
-        inserted += (await db.insert(workouts).values(c).onConflictDoNothing().returning({ id: workouts.id })).length;
-      }
-      for (const c of chunks(parsed.summaries, CHUNK)) {
-        inserted += (await db.insert(activitySummaries).values(c).onConflictDoNothing().returning({ id: activitySummaries.id })).length;
-      }
-      // NOTE: forcing Bun.gc(true) every 200k rows was measured *worse* (1.9 GB peak vs 1.42 GB
-      // without), so GC is left to the runtime. Peak RSS on a 410 MB export is ~1.4 GB.
+      inserted += writeBatch(parsed.records, parsed.workouts, parsed.summaries);
     };
 
     let sawXml = false;
     for await (const chunk of exportXmlChunks(zipBytes)) {
       sawXml = true;
       parser.write(decoder.decode(chunk, { stream: true })); // stream:true keeps split UTF-8 sequences intact
-      if (parser.pending() >= CHUNK) await flush();
-      if (DEBUG && flushes % 100 === 0) {
-        const m = process.memoryUsage();
-        console.error(
-          `[mem] rows=${seen} rss=${(m.rss / 1e6).toFixed(0)}MB heap=${(m.heapUsed / 1e6).toFixed(0)}MB ` +
-            `ext=${(m.external / 1e6).toFixed(0)}MB ab=${(m.arrayBuffers / 1e6).toFixed(0)}MB`,
-        );
-      }
+      if (parser.pending() >= CHUNK) flush();
     }
     if (!sawXml) throw new Error("export.xml not found in zip");
     parser.write(decoder.decode());
     parser.end();
-    await flush();
+    flush();
 
     const duplicates = seen - inserted;
     await db.update(uploads)

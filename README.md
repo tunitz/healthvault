@@ -19,15 +19,25 @@ A real 4-year iPhone/Watch export (17.5 MB zip → **410 MB** `export.xml`, 16 e
 | rows ingested | **911,472** (910,620 records, 133 workouts, 719 activity days) |
 | record types auto-discovered | 40 |
 | date range | 2022-09-21 → 2026-09-13 |
-| wall clock | ~48 s |
-| peak RSS | **~1.4 GB** (so the box wants ~2 GB free during an ingest) |
+| wall clock | **35 s** |
+| peak RSS | **~830 MB** |
 | sqlite file | 269 MB |
 
 34 rows inside that export were byte-identical duplicates of earlier rows and were skipped by the unique
 indexes — Apple does emit some. Re-importing the same file inserts 0 and reports every row as a duplicate.
 
+**Nothing is written to disk except `data/health.db`.** The upload is read into memory, the XML is inflated
+and parsed as a stream, and rows go straight into SQLite — no temp file, no extracted `export.xml`, and no
+copy of the zip anywhere. `src/test/ingest.test.ts` asserts exactly that, so it cannot regress silently.
+
+Where the time goes (instrumented, 410 MB XML): **XML+inflate 29 s**, SQLite ~5 s. That is why the DB side
+uses raw prepared statements rather than the query builder — see the note at the top of `src/lib/ingest.ts`.
+Three optimizations were measured and **rejected** for giving nothing: forcing `Bun.gc(true)` per 200k rows
+(peak 1.9 GB, worse), `PRAGMA synchronous = NORMAL` (no measurable gain, added a durability trade), and a
+hand-rolled date fast-path (29.3 s → 28.8 s). Do not re-add them without a measurement.
+
 Tuning knobs (defaults are fine): `INGEST_CHUNK` (rows per INSERT, 1000), `INGEST_SLICE` (zip bytes pushed
-into the inflater per step, 1 MiB), `INGEST_DEBUG=1` (per-100-flush memory trace).
+into the inflater per step, 1 MiB).
 
 ## Auth / transport
 

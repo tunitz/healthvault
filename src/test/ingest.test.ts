@@ -1,4 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname } from "node:path";
 import { fixtureXml, fixtureZip, freshDbPath, resetDatabase } from "./helpers";
 
 process.env.DATABASE_PATH = freshDbPath();
@@ -27,6 +30,28 @@ test("second ingest is fully deduped", async () => {
   expect(r.inserted).toBe(0);
   expect(r.duplicates).toBe(11);
   expect([count("records"), count("workouts"), count("activity_summaries")]).toEqual([9, 1, 1]);
+});
+
+test("nothing is left on disk: no uploaded copy, no extracted xml", async () => {
+  const { runIngest } = await import("@/lib/ingest");
+  const { sqlite } = await import("@/db");
+  await resetDatabase();
+
+  const dbFile = (sqlite.prepare("PRAGMA database_list").all() as { file: string }[])[0]!.file;
+  const dbDir = dirname(dbFile);
+  const dbDirBefore = new Set(readdirSync(dbDir));
+  const tmpBefore = new Set(readdirSync(tmpdir()));
+
+  const result = await runIngest(fixtureZip(), "export.zip", 1234);
+  expect(result.inserted).toBe(11);
+
+  // the database (plus its WAL sidecars) is the only thing allowed to appear
+  const newInDbDir = readdirSync(dbDir).filter((f) => !dbDirBefore.has(f));
+  expect(newInDbDir.filter((f) => !/\.db(-wal|-shm)?$/.test(f))).toEqual([]);
+
+  // and no upload/extract artifact anywhere in the temp dir
+  const newInTmp = readdirSync(tmpdir()).filter((f) => !tmpBefore.has(f));
+  expect(newInTmp.filter((f) => /\.(zip|xml)$|export|healthvault/i.test(f))).toEqual([]);
 });
 
 test("a multi-batch export inserts every row", async () => {
