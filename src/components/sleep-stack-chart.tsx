@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 
 const config = {
-  inBed: { label: "In bed", color: "var(--chart-4)" },
+  inBed: { label: "In bed", color: "var(--chart-4)" }, // kept for exports that only have InBed rows
   asleep: { label: "Asleep", color: "var(--chart-2)" },
   awake: { label: "Awake", color: "var(--chart-5)" },
   core: { label: "Core", color: "var(--chart-1)" },
@@ -39,7 +39,9 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
     <Card>
       <CardHeader>
         <CardTitle>Sleep by stage</CardTitle>
-        <CardDescription>Hours per night, stacked by sleep-analysis stage</CardDescription>
+        <CardDescription>
+          Hours asleep per night (InBed rows excluded: they cover the whole night and would double count)
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (

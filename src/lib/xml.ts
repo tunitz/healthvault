@@ -42,10 +42,12 @@ const STAGE: Record<string, number> = {
 const num = (v: string | undefined): number | undefined => (v === undefined || v === "" ? undefined : Number(v));
 const dayOf = (iso: string) => iso.slice(0, 10);
 
-export function parseHealthXml(xml: string): ParsedHealth {
-  const records: HealthRecordRow[] = [];
-  const workouts: WorkoutRow[] = [];
-  const summaries: SummaryRow[] = [];
+/**
+ * Incremental parser: feed it the export in arbitrary chunks (a real export is hundreds of
+ * MB of XML, so the caller streams it) and drain rows out as they are produced.
+ */
+export function createHealthParser() {
+  const rows: ParsedHealth = { records: [], workouts: [], summaries: [] };
 
   const p = sax.parser(true); // strict: real exports are well-formed XML
   let rec: sax.Tag | null = null;
@@ -63,7 +65,7 @@ export function parseHealthXml(xml: string): ParsedHealth {
     if (t.name === "Workout") { workout = t; meta = {}; return; }
     if (t.name === "ActivitySummary") {
       const a = t.attributes;
-      summaries.push({
+      rows.summaries.push({
         dateComponents: String(a.dateComponents ?? ""), day: dayOf(String(a.dateComponents ?? "")),
         activeEnergyBurned: num(a.activeEnergyBurned), activeEnergyBurnedGoal: num(a.activeEnergyBurnedGoal),
         appleMoveMinutes: num(a.appleMoveMinutes), appleMoveMinutesGoal: num(a.appleMoveMinutesGoal),
@@ -79,7 +81,7 @@ export function parseHealthXml(xml: string): ParsedHealth {
     if (name === "Correlation") { inCorrelation = false; return; }
     if (name === "Workout" && workout) {
       const a = workout.attributes;
-      workouts.push({
+      rows.workouts.push({
         workoutActivityType: String(a.workoutActivityType ?? "Unknown"),
         startDate: String(a.startDate ?? ""), startMs: msOf(String(a.startDate ?? "")), day: dayOf(String(a.startDate ?? "")),
         endDate: String(a.endDate ?? ""), endMs: msOf(String(a.endDate ?? "")),
@@ -102,7 +104,7 @@ export function parseHealthXml(xml: string): ParsedHealth {
           : 1;
       const startDate = String(a.startDate ?? "");
       const endDate = String(a.endDate ?? startDate);
-      records.push({
+      rows.records.push({
         typeIdentifier: type, unit: String(a.unit ?? ""), value,
         startDate, startMs: msOf(startDate), day: dayOf(startDate),
         endDate, endMs: msOf(endDate), sourceName: String(a.sourceName ?? ""),
@@ -111,6 +113,24 @@ export function parseHealthXml(xml: string): ParsedHealth {
     }
   };
 
-  p.write(xml).close();
-  return { records, workouts, summaries };
+  return {
+    write: (chunk: string) => { p.write(chunk); },
+    end: () => { p.close(); },
+    /** rows parsed so far */
+    pending: () => rows.records.length + rows.workouts.length + rows.summaries.length,
+    /** hand out the parsed rows and forget them (keeps memory bounded) */
+    drain: (): ParsedHealth => ({
+      records: rows.records.splice(0, rows.records.length),
+      workouts: rows.workouts.splice(0, rows.workouts.length),
+      summaries: rows.summaries.splice(0, rows.summaries.length),
+    }),
+  };
+}
+
+/** One-shot helper (tests, small documents). */
+export function parseHealthXml(xml: string): ParsedHealth {
+  const parser = createHealthParser();
+  parser.write(xml);
+  parser.end();
+  return parser.drain();
 }

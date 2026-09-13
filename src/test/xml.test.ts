@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { msOf, parseHealthXml } from "@/lib/xml";
+import { createHealthParser, msOf, parseHealthXml } from "@/lib/xml";
 import { fixtureXml } from "./helpers";
 
 const rows = parseHealthXml(fixtureXml());
@@ -33,4 +33,27 @@ test("summary fields", () => {
 
 test("msOf parses Apple date format", () => {
   expect(Number.isNaN(msOf("2026-09-01 07:30:00 +0800"))).toBe(false);
+});
+
+test("chunked feeding yields the same rows as a single write", () => {
+  const xml = fixtureXml();
+  const parser = createHealthParser();
+  for (let i = 0; i < xml.length; i += 97) parser.write(xml.slice(i, i + 97));
+  parser.end();
+  const drained = parser.drain();
+  expect(drained.records.length).toBe(9);
+  expect(drained.workouts.length).toBe(1);
+  expect(drained.summaries.length).toBe(1);
+  expect(drained.records.map((r) => r.value)).toEqual(rows.records.map((r) => r.value));
+  expect(parser.drain().records.length).toBe(0); // drain clears
+});
+
+test("a real export is huge: rows must drain incrementally, not accumulate", () => {
+  const many = Array.from({ length: 2500 }, (_, i) =>
+    `<Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" startDate="2026-09-01 0${i % 10}:00:00 +0800" endDate="2026-09-01 0${i % 10}:05:00 +0800" value="${i}"/>`,
+  ).join("");
+  const parser = createHealthParser();
+  parser.write(`<HealthData locale="en_US">${many}</HealthData>`);
+  parser.end();
+  expect(parser.pending()).toBe(2500);
 });

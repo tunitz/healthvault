@@ -27,12 +27,19 @@ export function dailyAverages(typeIdentifier: string, limit = 365) {
     .all(typeIdentifier, limit) as { day: string; avg: number; n: number }[]).reverse();
 }
 
+/** A sleep segment belongs to the night that started the previous evening: segments after
+ * midnight are attributed back to their start day (Apple writes a night as several records).
+ * InBed (1) is a superset of the asleep stages, so it is excluded everywhere it would be
+ * added to a total: summing it with the asleep rows double-counts the night. */
+const NIGHT = `CASE WHEN CAST(substr(start_date, 12, 2) AS INTEGER) < 12 THEN date(day, '-1 day') ELSE day END`;
+const ASLEEP = "(value IN (2, 4, 5, 6))"; // Asleep*, Core, Deep, REM — InBed(1)/Awake(3) excluded
+
 export function sleepByDayStage(limit = 90) {
   return (sqlite.prepare(`
-    SELECT day, value AS stage, SUM((end_ms - start_ms) / 3600000.0) AS hours
+    SELECT ${NIGHT} AS day, value AS stage, SUM((end_ms - start_ms) / 3600000.0) AS hours
     FROM records
-    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value > 0
-    GROUP BY day, value ORDER BY day DESC LIMIT ?`)
+    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
+    GROUP BY ${NIGHT}, value ORDER BY day DESC LIMIT ?`)
     .all(limit) as { day: string; stage: number; hours: number }[]).reverse();
 }
 
@@ -104,10 +111,10 @@ export function stepsSummary(days = 30) {
 
 export function sleepSummary(days = 30) {
   const row = sqlite.prepare(`
-    SELECT SUM((end_ms - start_ms) / 3600000.0) AS hours, COUNT(DISTINCT day) AS nights
+    SELECT SUM((end_ms - start_ms) / 3600000.0) AS hours, COUNT(DISTINCT ${NIGHT}) AS nights
     FROM records
-    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value > 0
-      AND day >= date('now', ?)`).get(`-${days} days`) as { hours: number | null; nights: number };
+    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND ${ASLEEP}
+      AND ${NIGHT} >= date('now', ?)`).get(`-${days} days`) as { hours: number | null; nights: number };
   const hours = row.hours ?? 0;
   return { windowDays: days, nights: row.nights, totalHours: hours, avgPerNight: row.nights ? hours / row.nights : 0 };
 }

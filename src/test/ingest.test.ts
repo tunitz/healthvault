@@ -24,6 +24,18 @@ test("second ingest is fully deduped", async () => {
   expect([count("records"), count("workouts"), count("activity_summaries")]).toEqual([9, 1, 1]);
 });
 
+test("a multi-batch export inserts every row", async () => {
+  const { zipSync, strToU8 } = await import("fflate");
+  const many = Array.from({ length: 2500 }, (_, i) =>
+    `<Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" startDate="2026-10-${String((i % 28) + 1).padStart(2, "0")} 05:00:0${i % 10} +0800" endDate="2026-10-${String((i % 28) + 1).padStart(2, "0")} 05:05:00 +0800" value="${i}"/>`,
+  ).join("");
+  const xml = `<HealthData locale="en_US">${many}</HealthData>`;
+  const r = await runIngest(zipSync({ "export.xml": strToU8(xml) }), "big.zip", xml.length);
+  expect(r.inserted).toBe(2500);
+  expect(r.duplicates).toBe(0);
+  expect(count("records")).toBe(9 + 2500);
+});
+
 test("ingest of a non-export zip fails cleanly", async () => {
   const { zipSync, strToU8 } = await import("fflate");
   await expect(runIngest(zipSync({ "other.txt": strToU8("hi") }), "bad.zip", 10)).rejects.toThrow("export.xml");

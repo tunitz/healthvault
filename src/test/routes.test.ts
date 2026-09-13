@@ -22,5 +22,12 @@ test("upload route ingests a real fixture zip", async () => {
   // ingest.test.ts shares this process, so the same fixture rows may already exist:
   // assert the arithmetic invariant instead of a fixed insert count.
   expect(body.inserted + body.duplicates).toBe(11);
-  expect((sqlite.prepare("SELECT COUNT(*) AS c FROM records").get() as { c: number }).c).toBe(9);
+  // the fixture's own rows must be in the table (other test files share this process/db)
+  const step = sqlite
+    .prepare(
+      "SELECT COUNT(*) AS c FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount' " +
+        "AND start_date = '2026-09-01 07:30:00 +0800' AND value = 1234",
+    )
+    .get() as { c: number };
+  expect(step.c).toBe(1);
 });

@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HealthVault
 
-## Getting Started
+Single-user web app: upload an Apple Health `Export.zip`, it is parsed into SQLite, and the data is
+browsed in a Next.js dashboard (shadcn components + recharts).
 
-First, run the development server:
+Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
+**shadcn** (radix + nova preset). No auth, no cloud, one local database file.
+
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+export PATH="$HOME/.bun/bin:$PATH"   # bun is not on PATH in non-interactive shells here
+bun install
+bun run db:generate                  # only after editing src/db/schema.ts
+bun run dev                          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`bun run build && bun run start` for production. The database file defaults to `./data/health.db`
+(git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. Migrations run on every
+boot inside `src/db/index.ts` (`migrate()` from the drizzle better-sqlite3 migrator) — a fresh file
+is brought up to schema automatically, which is also how the tests get their tables.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Ingest design (why it streams)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`Export.zip` contains one `export.xml`, and a real export is huge (5 years of Apple Watch data is
+hundreds of MB of XML, millions of rows). So `src/lib/ingest.ts`:
 
-## Learn More
+1. reads the uploaded zip into memory (the 200 MB cap in `POST /api/upload` is on the *zip*),
+2. inflates `export.xml` **in 1 MiB slices** with fflate's streaming `Unzip` and yields raw chunks,
+3. feeds those chunks to an incremental sax parser (`createHealthParser()` in `src/lib/xml.ts`),
+   decoding with `TextDecoder({ stream: true })` so UTF-8 sequences split across chunks survive,
+4. drains parsed rows and inserts them in 1000-row `onConflictDoNothing` batches, so memory stays
+   bounded by the batch instead of the document.
 
-To learn more about Next.js, take a look at the following resources:
+Measured on this box (4 GB RAM, 4 cores), 573k-row export / 139 MB XML / 7 MB zip:
+**38 s wall clock, ~625 MB peak RSS** (the pre-streaming version that inflated the whole document
+first peaked at ~1.8 GB, i.e. 13× the zip size — a 500 MB export would have OOM-killed the server).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Dedupe is a unique index per table (`uq_records_key`, `uq_workouts_key`,
+`activity_summaries.date_components`), so re-uploading the same export inserts nothing and reports
+the skipped rows as duplicates. Ingests are tracked in `uploads` (running → done/failed + counters).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Parsing rules worth knowing:
+- Correlation children are skipped — Apple also writes those records at the top level, so parsing
+  them twice would double count.
+- Sleep is stored as category rows with stage codes: 1 InBed, 2 Asleep, 3 Awake, 4 Core, 5 Deep,
+  6 REM. A night is attributed to the evening it started (`< 12:00` segments belong to the previous
+  day), and InBed is excluded from every sleep *total* because it wraps the asleep rows.
+- Unknown record types are stored as-is (Explorer lists every type found, quantity or category).
 
-## Deploy on Vercel
+## Layout
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summaries
+src/db/index.ts      sqlite connection + migrate-on-boot      src/db/queries.ts  aggregate SQL
+src/lib/xml.ts       incremental Apple Health XML parser      src/lib/ingest.ts  streaming ingest
+src/app/             dashboard (/), explorer, workouts, uploads + api/upload, api/type-stats
+src/components/      steps/sleep/activity charts, explorer client, upload form, ui/* (shadcn)
+src/test/            fixture XML + parser/ingest/route tests (bun test)
+scripts/seed-fixture.ts   load the test fixture into the database
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Verify
+
+```bash
+bun run typecheck && bun test src/ && bun run build
+```
+
+## Generate a big synthetic export (load testing)
+
+`/tmp/gen_demo_export.py` is a throwaway generator used for the numbers above (kept outside the
+repo): `python3 gen_demo_export.py <days> <hr_interval_min> <out.zip>`. Its 5-year output was
+uploaded twice — 572,946 rows inserted, then 0 inserted / 572,946 duplicates.

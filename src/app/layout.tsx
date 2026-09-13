@@ -24,13 +24,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <header className="border-b">
-          <nav className="mx-auto flex max-w-6xl items-center gap-1 px-4 py-3 text-sm">
-            <span className="mr-4 font-semibold tracking-tight">HealthVault</span>
+          <nav className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-1 gap-y-1 px-4 py-3 text-sm">
+            <span className="mr-2 font-semibold tracking-tight sm:mr-4">HealthVault</span>
             {NAV.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                className="rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:px-3"
               >
                 {item.label}
               </Link>

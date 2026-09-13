@@ -2,7 +2,14 @@
 
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import { compact } from "@/lib/format";
 
 const config = {
@@ -38,6 +45,7 @@ export function ActivityChart({
               />
               <YAxis width={48} tickLine={false} axisLine={false} tickFormatter={(v: number) => compact(v)} />
               <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartLegend content={<ChartLegendContent />} />
               <Bar dataKey="activeEnergy" fill="var(--color-activeEnergy)" radius={[4, 4, 0, 0]} />
               <Bar dataKey="activeEnergyGoal" fill="var(--color-activeEnergyGoal)" radius={[4, 4, 0, 0]} />
             </BarChart>
