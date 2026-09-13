@@ -6,6 +6,13 @@ browsed in a Next.js dashboard (shadcn components + recharts).
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
 **shadcn** (radix + nova preset). No auth, no cloud, one local database file.
 
+## Auth / transport
+
+Pushes and API calls use the classic `GITHUB_TOKEN` (scopes `repo`, `workflow`) from the Hermes
+secrets env, wired into git through `~/.hermes/scripts/git-credential-github.sh`
+(`credential.https://github.com.helper`). Production has **no SSH key on GitHub** — remotes must be
+`https://github.com/...`, not `git@github.com:...`.
+
 ## Run
 
 ```bash
