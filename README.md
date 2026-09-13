@@ -6,6 +6,29 @@ browsed in a Next.js dashboard (shadcn components + recharts).
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
 **shadcn** (radix + nova preset). No auth, no cloud, one local database file.
 
+## Real exports (measured)
+
+Apple's own "Export All Health Data" does **not** put `export.xml` at the zip root — it ships
+`apple_health_export/export.xml` (with `export_cda.xml` and `workout-routes/*.gpx` beside it). The ingest
+matches on the basename, so either layout works; a zip without it fails with the entry names listed.
+
+A real 4-year iPhone/Watch export (17.5 MB zip → **410 MB** `export.xml`, 16 entries):
+
+| | |
+|---|---|
+| rows ingested | **911,472** (910,620 records, 133 workouts, 719 activity days) |
+| record types auto-discovered | 40 |
+| date range | 2022-09-21 → 2026-09-13 |
+| wall clock | ~48 s |
+| peak RSS | **~1.4 GB** (so the box wants ~2 GB free during an ingest) |
+| sqlite file | 269 MB |
+
+34 rows inside that export were byte-identical duplicates of earlier rows and were skipped by the unique
+indexes — Apple does emit some. Re-importing the same file inserts 0 and reports every row as a duplicate.
+
+Tuning knobs (defaults are fine): `INGEST_CHUNK` (rows per INSERT, 1000), `INGEST_SLICE` (zip bytes pushed
+into the inflater per step, 1 MiB), `INGEST_DEBUG=1` (per-100-flush memory trace).
+
 ## Auth / transport
 
 Pushes and API calls use the classic `GITHUB_TOKEN` (scopes `repo`, `workflow`) from the Hermes

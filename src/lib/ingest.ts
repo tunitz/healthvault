@@ -6,8 +6,9 @@ import { createHealthParser } from "@/lib/xml";
 
 export type IngestResult = { uploadId: number; inserted: number; duplicates: number };
 
-const CHUNK = 1000;            // rows per INSERT statement
-const ZIP_SLICE = 1 << 20;     // 1 MiB of zip pushed into the inflater at a time
+const CHUNK = Number(process.env.INGEST_CHUNK ?? 1000);          // rows per INSERT statement
+const ZIP_SLICE = Number(process.env.INGEST_SLICE ?? 1 << 20);   // zip bytes pushed into the inflater at a time
+const DEBUG = process.env.INGEST_DEBUG === "1";
 
 function* chunks<T>(arr: T[], n: number): Generator<T[]> {
   for (let i = 0; i < arr.length; i += n) yield arr.slice(i, i + n);
@@ -19,11 +20,15 @@ function* chunks<T>(arr: T[], n: number): Generator<T[]> {
  */
 async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
   const ready: Uint8Array[] = [];
+  const seen: string[] = [];
   let sawEntry = false;
   let failure: Error | null = null;
 
   const unzipper = new Unzip((file) => {
-    if (file.name !== "export.xml") return;
+    seen.push(file.name);
+    // Real exports from the iPhone Files app live at `apple_health_export/export.xml`;
+    // older/repacked ones put it at the root. Match on the basename, not the full path.
+    if (file.name.toLowerCase().split("/").pop() !== "export.xml") return;
     sawEntry = true;
     file.ondata = (err, chunk) => {
       if (err) failure = err instanceof Error ? err : new Error(String(err));
@@ -41,7 +46,9 @@ async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
     await Promise.resolve(); // let the event loop breathe between slices
   }
   if (failure) throw failure;
-  if (!sawEntry) throw new Error("export.xml not found in zip");
+  if (!sawEntry) {
+    throw new Error(`export.xml not found in zip (entries: ${seen.slice(0, 10).join(", ") || "none"})`);
+  }
 }
 
 export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: number): Promise<IngestResult> {
@@ -56,7 +63,9 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
     let inserted = 0;
     let seen = 0;
 
+    let flushes = 0;
     const flush = async () => {
+      flushes++;
       const parsed = parser.drain();
       seen += parsed.records.length + parsed.workouts.length + parsed.summaries.length;
       for (const c of chunks(parsed.records, CHUNK)) {
@@ -68,6 +77,8 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
       for (const c of chunks(parsed.summaries, CHUNK)) {
         inserted += (await db.insert(activitySummaries).values(c).onConflictDoNothing().returning({ id: activitySummaries.id })).length;
       }
+      // NOTE: forcing Bun.gc(true) every 200k rows was measured *worse* (1.9 GB peak vs 1.42 GB
+      // without), so GC is left to the runtime. Peak RSS on a 410 MB export is ~1.4 GB.
     };
 
     let sawXml = false;
@@ -75,6 +86,13 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
       sawXml = true;
       parser.write(decoder.decode(chunk, { stream: true })); // stream:true keeps split UTF-8 sequences intact
       if (parser.pending() >= CHUNK) await flush();
+      if (DEBUG && flushes % 100 === 0) {
+        const m = process.memoryUsage();
+        console.error(
+          `[mem] rows=${seen} rss=${(m.rss / 1e6).toFixed(0)}MB heap=${(m.heapUsed / 1e6).toFixed(0)}MB ` +
+            `ext=${(m.external / 1e6).toFixed(0)}MB ab=${(m.arrayBuffers / 1e6).toFixed(0)}MB`,
+        );
+      }
     }
     if (!sawXml) throw new Error("export.xml not found in zip");
     parser.write(decoder.decode());

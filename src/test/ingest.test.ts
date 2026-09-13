@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { fixtureZip, freshDbPath, resetDatabase } from "./helpers";
+import { fixtureXml, fixtureZip, freshDbPath, resetDatabase } from "./helpers";
 
 process.env.DATABASE_PATH = freshDbPath();
 const { runIngest } = await import("@/lib/ingest");
@@ -39,6 +39,18 @@ test("a multi-batch export inserts every row", async () => {
   expect(r.inserted).toBe(2500);
   expect(r.duplicates).toBe(0);
   expect(count("records")).toBe(2500);
+});
+
+test("finds export.xml nested in apple_health_export/ (real iOS layout)", async () => {
+  const { zipSync, strToU8 } = await import("fflate");
+  const zip = zipSync({
+    "apple_health_export/export.xml": strToU8(fixtureXml()),
+    "apple_health_export/export_cda.xml": strToU8("<ClinicalDocument/>"),
+    "apple_health_export/workout-routes/route.gpx": strToU8("<gpx/>"),
+  });
+  const r = await runIngest(zip, "export.zip", zip.length);
+  expect(r.inserted).toBe(11);
+  expect(count("records")).toBe(9);
 });
 
 test("ingest of a non-export zip fails cleanly", async () => {
