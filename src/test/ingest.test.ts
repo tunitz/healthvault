@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
-import { fixtureZip, freshDbPath } from "./helpers";
+import { beforeEach, expect, test } from "bun:test";
+import { fixtureZip, freshDbPath, resetDatabase } from "./helpers";
 
 process.env.DATABASE_PATH = freshDbPath();
 const { runIngest } = await import("@/lib/ingest");
 const { sqlite } = await import("@/db");
+
+// Every test starts from empty tables: bun test may share one db handle across files.
+beforeEach(resetDatabase);
 
 const count = (table: "records" | "workouts" | "activity_summaries" | "uploads") =>
   (sqlite.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
@@ -11,6 +14,7 @@ const count = (table: "records" | "workouts" | "activity_summaries" | "uploads")
 test("first ingest inserts everything", async () => {
   const r = await runIngest(fixtureZip(), "fixture.zip", 1234);
   expect(r.inserted).toBe(11);
+  expect(r.duplicates).toBe(0);
   expect([count("records"), count("workouts"), count("activity_summaries")]).toEqual([9, 1, 1]);
   const u = sqlite.prepare("SELECT status, records_inserted AS ri FROM uploads").get() as { status: string; ri: number };
   expect(u.status).toBe("done");
@@ -18,6 +22,7 @@ test("first ingest inserts everything", async () => {
 });
 
 test("second ingest is fully deduped", async () => {
+  await runIngest(fixtureZip(), "fixture.zip", 1234);
   const r = await runIngest(fixtureZip(), "fixture.zip", 1234);
   expect(r.inserted).toBe(0);
   expect(r.duplicates).toBe(11);
@@ -33,7 +38,7 @@ test("a multi-batch export inserts every row", async () => {
   const r = await runIngest(zipSync({ "export.xml": strToU8(xml) }), "big.zip", xml.length);
   expect(r.inserted).toBe(2500);
   expect(r.duplicates).toBe(0);
-  expect(count("records")).toBe(9 + 2500);
+  expect(count("records")).toBe(2500);
 });
 
 test("ingest of a non-export zip fails cleanly", async () => {

@@ -15,6 +15,10 @@ secrets env, wired into git through `~/.hermes/scripts/git-credential-github.sh`
 
 ## Run
 
+Prerequisite: **bun >= 1.4**. bun 1.3.x crashes loading better-sqlite3 v13 with a NAPI fatal error,
+which surfaces as `Failed to load external module better-sqlite3-<hash>` — if `bun --version` is older,
+run `bun upgrade` first.
+
 ```bash
 export PATH="$HOME/.bun/bin:$PATH"   # bun is not on PATH in non-interactive shells here
 bun install
@@ -69,15 +73,16 @@ scripts/seed-fixture.ts   load the test fixture into the database
 
 ## Troubleshooting
 
-**`Failed to load external module better-sqlite3-<hash>: Cannot find module ...`** — the dev server
-can't load the native sqlite module; that message is only ever a symptom of a broken install, not of
-code. `bun run dev` now checks this up front (`scripts/check-native.ts`) and prints the platform,
-prebuilds and lockfiles it found. Fix by reinstalling cleanly **with bun** — mixing npm/pnpm/yarn
-lockfiles leaves a `node_modules` layout Turbopack cannot resolve native modules from:
+**`Failed to load external module better-sqlite3-<hash>: Cannot find module ...`** — Turbopack's way
+of saying the native sqlite module could not be loaded. It is never a code bug. Causes, in order:
 
-```bash
-rm -rf node_modules .next && bun install && bun run dev
-```
+1. **bun is older than 1.4** — 1.3.x panics on better-sqlite3 v13 (`NAPI FATAL ERROR`). Fix: `bun upgrade`.
+2. **The install is broken or mixed** — check with `bun scripts/check-native.ts` (also runs as `predev`,
+   printing platform, `prebuilds/` and which lockfiles are present), then reinstall cleanly **with bun**:
+   `rm -rf node_modules .next && bun install && bun run dev`. Mixing npm/pnpm/yarn lockfiles leaves a
+   layout Turbopack cannot resolve native modules from.
+3. **If the module loads fine and dev still fails**, it is Turbopack's externals handling, not your
+   install: use the webpack dev server instead — `bun run dev:webpack`.
 
 ## Verify
 

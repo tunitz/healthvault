@@ -1,9 +1,11 @@
-import { expect, test } from "bun:test";
-import { freshDbPath, fixtureZip } from "./helpers";
+import { beforeEach, expect, test } from "bun:test";
+import { freshDbPath, fixtureZip, resetDatabase } from "./helpers";
 
 process.env.DATABASE_PATH = freshDbPath();
 const { POST } = await import("@/app/api/upload/route");
 const { sqlite } = await import("@/db");
+
+beforeEach(resetDatabase);
 
 test("upload route rejects a form without the file field", async () => {
   const res = await POST(new Request("http://localhost/api/upload", { method: "POST", body: new FormData() }));
@@ -19,10 +21,9 @@ test("upload route ingests a real fixture zip", async () => {
   const res = await POST(new Request("http://localhost/api/upload", { method: "POST", body: form }));
   expect(res.status).toBe(200);
   const body = await res.json();
-  // ingest.test.ts shares this process, so the same fixture rows may already exist:
-  // assert the arithmetic invariant instead of a fixed insert count.
-  expect(body.inserted + body.duplicates).toBe(11);
-  // the fixture's own rows must be in the table (other test files share this process/db)
+  expect(body.inserted).toBe(11);
+  expect(body.duplicates).toBe(0);
+  // the fixture's own row landed
   const step = sqlite
     .prepare(
       "SELECT COUNT(*) AS c FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount' " +
