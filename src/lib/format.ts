@@ -1,6 +1,8 @@
-export function num(n: number | null | undefined, digits = 0): string {
+/** Numbers are shown with at most 2 decimals: no 7.866600000000001 in a tooltip, and no
+ * forced trailing zeros on whole numbers. `digits` caps the decimals (0 for counts). */
+export function num(n: number | null | undefined, digits = 2): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: digits });
 }
 
 export function compact(n: number | null | undefined): string {
@@ -49,8 +51,6 @@ export function hrZone(hr: number | null | undefined): { label: string; classNam
 
 /** At most 2 decimal places, trailing zeros trimmed. User rule: every number in the UI is
  * rounded to 2 dp, no matter how many decimals the database carries. */
-export function r2(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return "—";
-  const rounded = Math.round(v * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : String(parseFloat(rounded.toFixed(2)));
+export function r2(v: number | null | undefined, digits = 2): string {
+  return num(v, digits);
 }

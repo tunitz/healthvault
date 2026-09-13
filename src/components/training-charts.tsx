@@ -5,7 +5,7 @@ import {
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { compact, num } from "@/lib/format";
+import { compact, num, r2 } from "@/lib/format";
 
 /**
  * Training visuals. Colours are literal hex rather than theme tokens: these are the screens the
@@ -74,7 +74,7 @@ export function StepsChart({ data }: { data: { day: string; value: number; sourc
               <CartesianGrid vertical={false} stroke={C.grid} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={28} {...axis} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis width={52} tickLine={false} axisLine={false} {...axis} tickFormatter={(v: number) => compact(v)} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} steps`, name]} />
               <ReferenceLine y={avg} stroke={C.stepsSoft} strokeDasharray="4 4" label={{ value: `avg ${compact(avg)}`, fill: C.stepsSoft, fontSize: 11, position: "insideTopRight" }} />
               <Area dataKey="value" name="steps" type="monotone" stroke={C.steps} strokeWidth={2} fill="url(#gSteps)" />
             </AreaChart>
@@ -85,7 +85,9 @@ export function StepsChart({ data }: { data: { day: string; value: number; sourc
   );
 }
 
-export function WeeklyVolumeChart({ data }: { data: { weekStart: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null }[] }) {
+export function WeeklyVolumeChart({ data }: { data: { weekStart: string; weekEnd: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null }[] }) {
+  // hover shows the actual Sunday–Saturday span, not just the first day of the week
+  const range = new Map(data.map((d) => [d.weekStart, `${d.weekStart} → ${d.weekEnd}`]));
   return (
     <Card className="overflow-hidden border-indigo-500/20 bg-gradient-to-b from-indigo-500/[0.07] to-transparent">
       <CardHeader>
@@ -100,7 +102,11 @@ export function WeeklyVolumeChart({ data }: { data: { weekStart: string; session
               <XAxis dataKey="weekStart" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} {...axis} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis width={48} tickLine={false} axisLine={false} {...axis} tickFormatter={(v: number) => compact(v)} />
               <YAxis yAxisId="km" orientation="right" width={44} tickLine={false} axisLine={false} {...axis} tickFormatter={(v: number) => num(v, 0)} />
-              <Tooltip {...tip} />
+              <Tooltip
+                {...tip}
+                labelFormatter={(label) => range.get(String(label)) ?? String(label)}
+                formatter={(v, name) => [name === "km" ? `${r2(Number(v))} km` : `${r2(Number(v))} min`, name]}
+              />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="minutes" name="minutes" fill={C.minutes} radius={[4, 4, 0, 0]} maxBarSize={26} fillOpacity={0.85} />
               <Line yAxisId="km" dataKey="km" name="km" type="monotone" stroke={C.distance} strokeWidth={2} dot={{ r: 2.5 }} />
@@ -126,7 +132,7 @@ export function PaceTrendChart({ data }: { data: { day: string; paceMinPerKm: nu
             <LineChart data={points} margin={{ left: 4, right: 10, top: 8 }}>
               <CartesianGrid vertical={false} stroke={C.grid} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} {...axis} tickFormatter={(v: string) => v.slice(5)} />
-              <YAxis width={48} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => v.toFixed(1)} />
+              <YAxis width={48} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => r2(v)} />
               <Tooltip {...tip} formatter={(v) => [`${Number(v).toFixed(2)} min/km`, "pace"]} />
               <Line dataKey="paceMinPerKm" name="min/km" type="monotone" stroke={C.pace} strokeWidth={2.5} dot={{ r: 3, fill: C.pace }} activeDot={{ r: 5 }} />
             </LineChart>
@@ -161,7 +167,7 @@ export function WorkoutHrChart({ data }: { data: { day: string; avgHr: number | 
               <CartesianGrid vertical={false} stroke={C.grid} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} {...axis} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis width={44} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} bpm ${name === "max" ? "(peak)" : "(avg)"}`, name]} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <ReferenceLine y={avg} stroke={C.hrSoft} strokeDasharray="4 4" />
               <Area dataKey="maxHr" name="max" type="monotone" stroke={C.hr} strokeWidth={1.5} fill="url(#gMaxHr)" />
@@ -198,7 +204,7 @@ export function FitnessTrendChart({ resting, vo2 }: {
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} {...axis} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis yAxisId="hr" width={40} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} />
               <YAxis yAxisId="vo2" orientation="right" width={40} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => v.toFixed(0)} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} ${name === "VO2max" ? "ml/kg/min" : "bpm"}`, name]} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Line yAxisId="hr" dataKey="resting" name="resting HR" type="monotone" stroke={C.resting} strokeWidth={2.5} dot={false} connectNulls />
               <Line yAxisId="vo2" dataKey="vo2" name="VO2max" type="monotone" stroke={C.vo2} strokeWidth={2.5} dot={false} connectNulls />
@@ -230,7 +236,7 @@ export function HeartRateDailyChart({ data }: { data: { day: string; value: numb
               <CartesianGrid vertical={false} stroke={C.grid} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={28} {...axis} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis width={44} tickLine={false} axisLine={false} {...axis} domain={["auto", "auto"]} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} bpm`, name]} />
               <Area dataKey="value" name="bpm" type="monotone" stroke={C.hr} strokeWidth={2} fill="url(#gHr)" />
             </AreaChart>
           </Chart>

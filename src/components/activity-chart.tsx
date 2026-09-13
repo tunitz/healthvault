@@ -10,11 +10,11 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { compact } from "@/lib/format";
+import { compact, r2 } from "@/lib/format";
 
 const config = {
-  activeEnergy: { label: "Active energy (kcal)", color: "var(--chart-2)" },
-  activeEnergyGoal: { label: "Goal (kcal)", color: "var(--chart-4)" },
+  activeEnergy: { label: "Active energy (kcal)", color: "#f59e0b" },
+  activeEnergyGoal: { label: "Goal (kcal)", color: "#64748b" },
 } satisfies ChartConfig;
 
 export function ActivityChart({
@@ -23,9 +23,9 @@ export function ActivityChart({
   data: { day: string; activeEnergy: number | null; activeEnergyGoal: number | null }[];
 }) {
   return (
-    <Card>
+    <Card className="overflow-hidden border-amber-500/20 bg-gradient-to-b from-amber-500/[0.07] to-transparent">
       <CardHeader>
-        <CardTitle>Active energy vs goal</CardTitle>
+        <CardTitle className="text-amber-400">Active energy vs goal</CardTitle>
         <CardDescription>From ActivitySummary rings recorded by Apple Watch</CardDescription>
       </CardHeader>
       <CardContent>
@@ -44,7 +44,7 @@ export function ActivityChart({
                 tickFormatter={(v: string) => v.slice(5)}
               />
               <YAxis width={48} tickLine={false} axisLine={false} tickFormatter={(v: number) => compact(v)} />
-              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartTooltip content={<ChartTooltipContent formatter={(value) => [`${r2(Number(value))} kcal`, ""]} />} />
               <ChartLegend content={<ChartLegendContent />} />
               <Bar dataKey="activeEnergy" fill="var(--color-activeEnergy)" radius={[4, 4, 0, 0]} />
               <Bar dataKey="activeEnergyGoal" fill="var(--color-activeEnergyGoal)" radius={[4, 4, 0, 0]} />

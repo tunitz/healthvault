@@ -3,14 +3,15 @@
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
+import { r2 } from "@/lib/format";
 
 const config = {
-  inBed: { label: "In bed", color: "var(--chart-4)" }, // kept for exports that only have InBed rows
-  asleep: { label: "Asleep", color: "var(--chart-2)" },
-  awake: { label: "Awake", color: "var(--chart-5)" },
-  core: { label: "Core", color: "var(--chart-1)" },
-  deep: { label: "Deep", color: "var(--chart-2)" },
-  rem: { label: "REM", color: "var(--chart-3)" },
+  inBed: { label: "In bed", color: "#64748b" }, // kept for exports that only have InBed rows
+  asleep: { label: "Asleep", color: "#6366f1" },
+  awake: { label: "Awake", color: "#f59e0b" },
+  core: { label: "Core", color: "#a78bfa" },
+  deep: { label: "Deep", color: "#06b6d4" },
+  rem: { label: "REM", color: "#ec4899" },
 } satisfies ChartConfig;
 
 const KEYS = ["inBed", "asleep", "awake", "core", "deep", "rem"] as const;
@@ -36,9 +37,9 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
   const present = KEYS.filter((k) => rows.some((r) => Number(r[k]) > 0));
 
   return (
-    <Card>
+    <Card className="overflow-hidden border-violet-500/20 bg-gradient-to-b from-violet-500/[0.07] to-transparent">
       <CardHeader>
-        <CardTitle>Sleep by stage</CardTitle>
+        <CardTitle className="text-violet-400">Sleep by stage</CardTitle>
         <CardDescription>
           Hours asleep per night (InBed rows excluded: they cover the whole night and would double count)
         </CardDescription>
@@ -59,7 +60,9 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
                 tickFormatter={(v: string) => v.slice(5)}
               />
               <YAxis width={40} tickLine={false} axisLine={false} unit="h" />
-              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartTooltip
+                content={<ChartTooltipContent formatter={(value) => [`${r2(Number(value))} h`, ""]} />}
+              />
               <ChartLegend content={<ChartLegendContent />} />
               {present.map((key, i) => (
                 <Bar

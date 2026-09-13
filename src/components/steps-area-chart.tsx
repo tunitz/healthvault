@@ -3,17 +3,17 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { compact, num } from "@/lib/format";
+import { compact, num, r2 } from "@/lib/format";
 
 const config = {
-  total: { label: "Steps", color: "var(--chart-2)" },
+  total: { label: "Steps", color: "#10b981" },
 } satisfies ChartConfig;
 
 export function StepsAreaChart({ data }: { data: { day: string; total: number }[] }) {
   return (
-    <Card>
+    <Card className="overflow-hidden border-emerald-500/20 bg-gradient-to-b from-emerald-500/[0.07] to-transparent">
       <CardHeader>
-        <CardTitle>Steps per day</CardTitle>
+        <CardTitle className="text-emerald-400">Steps per day</CardTitle>
         <CardDescription>Sum of every step-count record, grouped by export-local day</CardDescription>
       </CardHeader>
       <CardContent>
@@ -44,7 +44,12 @@ export function StepsAreaChart({ data }: { data: { day: string; total: number }[
                 tickFormatter={(v: number) => compact(v)}
               />
               <ChartTooltip
-                content={<ChartTooltipContent labelFormatter={(v) => `${v}`} />}
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(v) => `${v}`}
+                    formatter={(value) => [r2(Number(value)), "steps"]}
+                  />
+                }
               />
               <Area
                 dataKey="total"

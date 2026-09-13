@@ -17,15 +17,17 @@ import { compact, num } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-function StatCard({ title, value, hint }: { title: string; value: string; hint?: string }) {
+function StatCard({ title, value, hint, accent, valueClass }: {
+  title: string; value: string; hint?: string; accent: string; valueClass?: string;
+}) {
   return (
-    <Card>
-      <CardHeader>
+    <Card className={`overflow-hidden border-l-4 ${accent} bg-card/60`}>
+      <CardHeader className="pb-2">
         <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+        <CardTitle className={`text-3xl tabular-nums ${valueClass ?? ""}`}>{value}</CardTitle>
       </CardHeader>
       {hint ? (
-        <CardContent>
+        <CardContent className="pt-0">
           <p className="text-xs text-muted-foreground">{hint}</p>
         </CardContent>
       ) : null}
@@ -69,21 +71,29 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
+          accent="border-l-emerald-500"
+          valueClass="text-emerald-400"
           title="Steps (last 30 days)"
           value={compact(steps.totalInWindow)}
           hint={`${num(steps.avgPerDay)} / day average · ${compact(steps.allTimeSteps)} all time`}
         />
         <StatCard
+          accent="border-l-violet-500"
+          valueClass="text-violet-400"
           title="Sleep (last 30 days)"
-          value={`${num(sleep.avgPerNight, 1)} h`}
-          hint={`${num(sleep.nights)} nights · ${num(sleep.totalHours, 1)} h total`}
+          value={`${num(sleep.avgPerNight)} h`}
+          hint={`${num(sleep.nights)} nights · ${num(sleep.totalHours)} h total`}
         />
         <StatCard
+          accent="border-l-amber-500"
+          valueClass="text-amber-400"
           title="Active energy (last 30 days)"
           value={`${compact(activity.energy)} kcal`}
           hint={`${num(activity.exerciseMinutes)} exercise min · ${num(activity.days)} summary days`}
         />
         <StatCard
+          accent="border-l-sky-500"
+          valueClass="text-sky-400"
           title="Move minutes (last 30 days)"
           value={compact(activity.moveMinutes)}
           hint="Apple Move minutes from activity summaries"
