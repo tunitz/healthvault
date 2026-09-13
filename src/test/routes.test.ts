@@ -21,13 +21,13 @@ test("upload route ingests a real fixture zip", async () => {
   const res = await POST(new Request("http://localhost/api/upload", { method: "POST", body: form }));
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.inserted).toBe(11);
+  expect(body.inserted).toBe(12);
   expect(body.duplicates).toBe(0);
-  // the fixture's own row landed
+  // a fixture row landed, with its device recorded
   const step = sqlite
     .prepare(
       "SELECT COUNT(*) AS c FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount' " +
-        "AND start_date = '2026-09-01 07:30:00 +0800' AND value = 1234",
+        "AND start_date = '2026-09-01 08:00:00 +0800' AND value = 1000 AND source_name = 'Apple Watch'",
     )
     .get() as { c: number };
   expect(step.c).toBe(1);

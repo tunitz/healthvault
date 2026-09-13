@@ -44,6 +44,11 @@ export const workouts = sqliteTable(
     totalDistanceUnit: text("total_distance_unit"),
     totalEnergyBurned: real("total_energy_burned"),
     totalEnergyBurnedUnit: text("total_energy_burned_unit"),
+    // from <WorkoutStatistics type="...HeartRate" average/minimum/maximum> — the intensity
+    // signal that shows whether training is paying off
+    avgHr: real("avg_hr"),
+    minHr: real("min_hr"),
+    maxHr: real("max_hr"),
     sourceName: text("source_name"),
     metadataJson: text("metadata_json"),
   },

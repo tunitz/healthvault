@@ -6,6 +6,22 @@ browsed in a Next.js dashboard (shadcn components + recharts).
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
 **shadcn** (radix + nova preset). No auth, no cloud, one local database file.
 
+## Upgrading from an earlier import
+
+Workout parsing was corrected: distance/energy/heart-rate now come from the `<WorkoutStatistics>`
+children (they were being read from attributes that real exports do not have), and `durationUnit`
+is honoured (`"min"` was being stored as seconds, making every workout 60x too short). Steps and
+heart rate are no longer summed across devices — each day is read from the source with the most
+samples, because the phone and the watch both record them and adding them together double counts.
+
+Rows already in the database keep their old values, and the unique key of a workout does not change,
+so a re-upload cannot repair them. Delete the database and import once more:
+
+```bash
+rm -rf data/        # or: rm data/health.db*
+bun run dev         # then upload Export.zip again
+```
+
 ## Real exports (measured)
 
 Apple's own "Export All Health Data" does **not** put `export.xml` at the zip root — it ships

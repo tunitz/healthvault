@@ -36,3 +36,13 @@ export function typeLabel(identifier: string): string {
 export function workoutLabel(identifier: string): string {
   return identifier.replace(/^HKWorkoutActivityType/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
 }
+
+/** Heart-rate intensity band. Kept here (not in the chart module, which is a client
+ * component) because server components need it too. */
+export function hrZone(hr: number | null | undefined): { label: string; className: string } {
+  if (hr === null || hr === undefined) return { label: "—", className: "text-muted-foreground" };
+  if (hr < 120) return { label: "easy", className: "text-emerald-400" };
+  if (hr < 145) return { label: "steady", className: "text-amber-400" };
+  if (hr < 165) return { label: "hard", className: "text-orange-400" };
+  return { label: "max", className: "text-rose-400" };
+}

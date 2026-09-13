@@ -59,12 +59,15 @@ export function allWorkouts(limit = 500) {
     SELECT workout_activity_type AS type, day, start_date AS startDate, end_date AS endDate,
            duration_seconds AS durationSeconds, total_distance AS totalDistance,
            total_distance_unit AS totalDistanceUnit, total_energy_burned AS totalEnergyBurned,
-           total_energy_burned_unit AS totalEnergyBurnedUnit, source_name AS sourceName,
-           metadata_json AS metadataJson
+           total_energy_burned_unit AS totalEnergyBurnedUnit, avg_hr AS avgHr, min_hr AS minHr,
+           max_hr AS maxHr, source_name AS sourceName, metadata_json AS metadataJson,
+           CASE WHEN total_distance > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm
     FROM workouts ORDER BY start_ms DESC LIMIT ?`).all(limit) as {
       type: string; day: string; startDate: string; endDate: string;
       durationSeconds: number | null; totalDistance: number | null; totalDistanceUnit: string | null;
       totalEnergyBurned: number | null; totalEnergyBurnedUnit: string | null;
+      avgHr: number | null; minHr: number | null; maxHr: number | null; paceMinPerKm: number | null;
       sourceName: string | null; metadataJson: string | null;
     }[];
 }
@@ -126,4 +129,147 @@ export function activitySummaryTotals(days = 30) {
     FROM activity_summaries WHERE day >= date('now', ?)`).get(`-${days} days`) as {
       energy: number | null; exercise: number | null; move: number | null; days: number };
   return { windowDays: days, energy: row.energy ?? 0, exerciseMinutes: row.exercise ?? 0, moveMinutes: row.move ?? 0, days: row.days };
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Training analytics
+ *
+ * Every quantity below is recorded by more than one device (phone + watch overlap in time), so
+ * summing `value` across all records double counts. Each day is therefore read from ONE source:
+ * the source with the most samples that day. The chosen source is returned so the UI can show
+ * where a number came from instead of hiding it.
+ * ------------------------------------------------------------------------------------------- */
+
+export type DailyPoint = { day: string; value: number; source: string };
+
+export function dailySeriesSingleSource(typeIdentifier: string, days = 90, agg: "sum" | "avg" = "sum"): DailyPoint[] {
+  const fn = agg === "sum" ? "SUM(value)" : "AVG(value)";
+  return sqlite.prepare(`
+    WITH perSource AS (
+      SELECT day, source_name AS source, ${fn} AS value, COUNT(*) AS samples
+      FROM records WHERE type_identifier = ? AND day >= date('now', ?)
+      GROUP BY day, source_name
+    ), ranked AS (
+      SELECT day, source, value,
+             ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, value DESC) AS rk
+      FROM perSource
+    )
+    SELECT day, source, value FROM ranked WHERE rk = 1 ORDER BY day`).all(typeIdentifier, `-${days} days`) as DailyPoint[];
+}
+
+export function stepsDaily(days = 90) {
+  return dailySeriesSingleSource("HKQuantityTypeIdentifierStepCount", days, "sum");
+}
+export function heartRateDaily(days = 90) {
+  return dailySeriesSingleSource("HKQuantityTypeIdentifierHeartRate", days, "avg");
+}
+export function restingHeartRateDaily(days = 180) {
+  return dailySeriesSingleSource("HKQuantityTypeIdentifierRestingHeartRate", days, "avg");
+}
+export function vo2MaxDaily(days = 365) {
+  return dailySeriesSingleSource("HKQuantityTypeIdentifierVO2Max", days, "avg");
+}
+export function walkingHrDaily(days = 180) {
+  return dailySeriesSingleSource("HKQuantityTypeIdentifierWalkingHeartRateAverage", days, "avg");
+}
+
+/** Which devices contributed a type, so a suspicious number can be traced. */
+export function sourceBreakdown(typeIdentifier: string) {
+  return sqlite.prepare(`
+    SELECT source_name AS source, COUNT(*) AS records, SUM(value) AS total, MIN(day) AS firstDay, MAX(day) AS lastDay
+    FROM records WHERE type_identifier = ? GROUP BY source_name ORDER BY records DESC`)
+    .all(typeIdentifier) as { source: string; records: number; total: number; firstDay: string; lastDay: string }[];
+}
+
+export type WorkoutRow = {
+  day: string; startDate: string; type: string;
+  minutes: number | null; km: number | null; kcal: number | null;
+  paceMinPerKm: number | null; speedKmh: number | null;
+  avgHr: number | null; minHr: number | null; maxHr: number | null;
+  sourceName: string | null;
+};
+
+/** Newest first, with pace derived where a distance exists. */
+export function workoutHistory(limit = 200): WorkoutRow[] {
+  return sqlite.prepare(`
+    SELECT day, start_date AS startDate, workout_activity_type AS type,
+           duration_seconds / 60.0 AS minutes, total_distance AS km, total_energy_burned AS kcal,
+           CASE WHEN total_distance > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm,
+           CASE WHEN total_distance > 0 AND duration_seconds > 0
+                THEN total_distance / (duration_seconds / 3600.0) END AS speedKmh,
+           avg_hr AS avgHr, min_hr AS minHr, max_hr AS maxHr, source_name AS sourceName
+    FROM workouts ORDER BY start_ms DESC LIMIT ?`).all(limit) as WorkoutRow[];
+}
+
+/** Per-workout intensity over time — the "am I getting fitter" line (same pace, lower HR). */
+export function workoutTrend(days = 180) {
+  return sqlite.prepare(`
+    SELECT day, total_distance AS km, duration_seconds / 60.0 AS minutes,
+           avg_hr AS avgHr, max_hr AS maxHr,
+           CASE WHEN total_distance > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm
+    FROM workouts
+    WHERE day >= date('now', ?) AND workout_activity_type LIKE '%Running%'
+    ORDER BY start_ms`).all(`-${days} days`) as {
+      day: string; km: number | null; minutes: number; avgHr: number | null;
+      maxHr: number | null; paceMinPerKm: number | null;
+    }[];
+}
+
+/** Week-by-week volume: sessions, minutes, distance, average HR. */
+export function weeklyTraining(weeks = 26) {
+  return sqlite.prepare(`
+    SELECT date(day, '-' || ((CAST(strftime('%w', day) AS INTEGER) + 6) % 7) || ' days') AS weekStart,
+           COUNT(*) AS sessions,
+           SUM(duration_seconds) / 60.0 AS minutes,
+           SUM(total_distance) AS km,
+           AVG(avg_hr) AS avgHr
+    FROM workouts
+    WHERE day >= date('now', ?)
+    GROUP BY weekStart ORDER BY weekStart`).all(`-${weeks * 7} days`) as {
+      weekStart: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null;
+    }[];
+}
+
+export function workoutTotals(days = 30) {
+  const row = sqlite.prepare(`
+    SELECT COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes, SUM(total_distance) AS km,
+           SUM(total_energy_burned) AS kcal, AVG(avg_hr) AS avgHr, MAX(max_hr) AS maxHr
+    FROM workouts WHERE day >= date('now', ?)`).get(`-${days} days`) as {
+      sessions: number; minutes: number | null; km: number | null; kcal: number | null;
+      avgHr: number | null; maxHr: number | null };
+  return { windowDays: days, ...row };
+}
+
+export function workoutTypeBreakdown(days = 180) {
+  return sqlite.prepare(`
+    SELECT workout_activity_type AS type, COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes,
+           SUM(total_distance) AS km
+    FROM workouts WHERE day >= date('now', ?)
+    GROUP BY type ORDER BY sessions DESC`).all(`-${days} days`) as {
+      type: string; sessions: number; minutes: number | null; km: number | null }[];
+}
+
+/** Change between the last 30 days and the 30 before it — direction of travel, not a snapshot. */
+export function trendDelta(days = 30) {
+  const half = (offset: number) =>
+    sqlite.prepare(`
+      SELECT COUNT(*) AS sessions, SUM(total_distance) AS km, AVG(avg_hr) AS avgHr,
+             SUM(duration_seconds) / 60.0 AS minutes
+      FROM workouts WHERE day >= date('now', ?) AND day < date('now', ?)`)
+      .get(`-${offset + days} days`, `-${offset} days`) as {
+        sessions: number; km: number | null; avgHr: number | null; minutes: number | null };
+  const now = half(0);
+  const before = half(days);
+  const pct = (a: number | null, b: number | null) =>
+    a === null || b === null || b === 0 ? null : ((a - b) / b) * 100;
+  return {
+    windowDays: days,
+    thisPeriod: now,
+    lastPeriod: before,
+    kmChangePct: pct(now.km, before.km),
+    minutesChangePct: pct(now.minutes, before.minutes),
+    avgHrChange: now.avgHr !== null && before.avgHr !== null ? now.avgHr - before.avgHr : null,
+  };
 }

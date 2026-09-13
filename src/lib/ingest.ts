@@ -26,10 +26,10 @@ const insertRecord = sqlite.prepare(
 const insertWorkout = sqlite.prepare(
   `INSERT INTO workouts (workout_activity_type, start_date, start_ms, day, end_date, end_ms,
                          duration_seconds, total_distance, total_distance_unit, total_energy_burned,
-                         total_energy_burned_unit, source_name, metadata_json)
+                         total_energy_burned_unit, avg_hr, min_hr, max_hr, source_name, metadata_json)
    VALUES (@workoutActivityType, @startDate, @startMs, @day, @endDate, @endMs,
            @durationSeconds, @totalDistance, @totalDistanceUnit, @totalEnergyBurned,
-           @totalEnergyBurnedUnit, @sourceName, @metadataJson)
+           @totalEnergyBurnedUnit, @avgHr, @minHr, @maxHr, @sourceName, @metadataJson)
    ON CONFLICT DO NOTHING`,
 );
 const insertSummary = sqlite.prepare(

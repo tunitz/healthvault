@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { allWorkouts } from "@/db/queries";
-import { minutes, num, workoutLabel } from "@/lib/format";
+import { hrZone, minutes, num, workoutLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +60,9 @@ export default function WorkoutsPage() {
                     <TableHead>Activity</TableHead>
                     <TableHead className="text-right">Duration</TableHead>
                     <TableHead className="text-right">Distance</TableHead>
+                    <TableHead className="text-right">Pace</TableHead>
+                    <TableHead className="text-right">Avg HR</TableHead>
+                    <TableHead className="text-right">Max HR</TableHead>
                     <TableHead className="text-right">Energy</TableHead>
                     <TableHead>Source</TableHead>
                   </TableRow>
@@ -70,8 +73,17 @@ export default function WorkoutsPage() {
                       <TableCell className="tabular-nums">{w.day}</TableCell>
                       <TableCell>{workoutLabel(w.type)}</TableCell>
                       <TableCell className="text-right tabular-nums">{minutes(w.durationSeconds)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="text-right tabular-nums text-violet-300">
                         {w.totalDistance === null ? "—" : `${num(w.totalDistance, 2)} ${w.totalDistanceUnit ?? ""}`}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-amber-300">
+                        {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
+                      </TableCell>
+                      <TableCell className={`text-right tabular-nums ${hrZone(w.avgHr).className}`}>
+                        {w.avgHr === null ? "—" : num(w.avgHr, 0)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-rose-300">
+                        {w.maxHr === null ? "—" : num(w.maxHr, 0)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {w.totalEnergyBurned === null
