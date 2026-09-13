@@ -46,3 +46,11 @@ export function hrZone(hr: number | null | undefined): { label: string; classNam
   if (hr < 165) return { label: "hard", className: "text-orange-400" };
   return { label: "max", className: "text-rose-400" };
 }
+
+/** At most 2 decimal places, trailing zeros trimmed. User rule: every number in the UI is
+ * rounded to 2 dp, no matter how many decimals the database carries. */
+export function r2(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const rounded = Math.round(v * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(parseFloat(rounded.toFixed(2)));
+}

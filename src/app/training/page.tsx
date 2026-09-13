@@ -63,8 +63,18 @@ export default function TrainingPage() {
   const vo2Latest = vo2.at(-1)?.value;
   const vo2First = vo2[0]?.value;
   const vo2Delta = vo2Latest !== undefined && vo2First !== undefined ? vo2Latest - vo2First : null;
-  const stepSources = sourceBreakdown("HKQuantityTypeIdentifierStepCount");
-  const hrSources = sourceBreakdown("HKQuantityTypeIdentifierHeartRate");
+  // one row per device (a device records both metrics, and two badges with the same label
+  // were colliding as React keys)
+  const deviceMap = new Map<string, { source: string; steps: number; hr: number }>();
+  for (const s of sourceBreakdown("HKQuantityTypeIdentifierStepCount")) {
+    deviceMap.set(s.source, { source: s.source, steps: s.records, hr: 0 });
+  }
+  for (const s of sourceBreakdown("HKQuantityTypeIdentifierHeartRate")) {
+    const row = deviceMap.get(s.source) ?? { source: s.source, steps: 0, hr: 0 };
+    row.hr = s.records;
+    deviceMap.set(s.source, row);
+  }
+  const devices = [...deviceMap.values()].sort((a, b) => b.hr + b.steps - (a.hr + a.steps));
 
   return (
     <div className="flex flex-col gap-6">
@@ -176,12 +186,22 @@ export default function TrainingPage() {
             Devices that recorded these metrics, so a surprising total can be traced to its origin.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          {[...stepSources, ...hrSources].map((s) => (
-            <Badge key={`${s.source}`} variant="secondary" className="gap-1">
-              {s.source}: {compact(s.records)} records
-            </Badge>
-          ))}
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-2">
+            {devices.map((d) => (
+              <Badge key={d.source} variant="secondary" className="gap-1">
+                <span className="text-emerald-400">{compact(d.steps)} steps</span>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-rose-400">{compact(d.hr)} heart rate</span>
+                <span className="text-muted-foreground">·</span>
+                {d.source}
+              </Badge>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Only one device is counted per day — the one with the most samples — so these are never added
+            together.
+          </p>
         </CardContent>
       </Card>
     </div>

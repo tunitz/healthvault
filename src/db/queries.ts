@@ -220,7 +220,8 @@ export function workoutTrend(days = 180) {
 /** Week-by-week volume: sessions, minutes, distance, average HR. */
 export function weeklyTraining(weeks = 26) {
   return sqlite.prepare(`
-    SELECT date(day, '-' || ((CAST(strftime('%w', day) AS INTEGER) + 6) % 7) || ' days') AS weekStart,
+    SELECT date(day, '-' || CAST(strftime('%w', day) AS INTEGER) || ' days') AS weekStart,
+           date(day, '-' || CAST(strftime('%w', day) AS INTEGER) || ' days', '+6 days') AS weekEnd,
            COUNT(*) AS sessions,
            SUM(duration_seconds) / 60.0 AS minutes,
            SUM(total_distance) AS km,
@@ -228,7 +229,8 @@ export function weeklyTraining(weeks = 26) {
     FROM workouts
     WHERE day >= date('now', ?)
     GROUP BY weekStart ORDER BY weekStart`).all(`-${weeks * 7} days`) as {
-      weekStart: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null;
+      weekStart: string; weekEnd: string; sessions: number; minutes: number | null;
+      km: number | null; avgHr: number | null;
     }[];
 }
 
