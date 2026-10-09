@@ -1,0 +1,21 @@
+services:
+  healthvault:
+    build: .
+    image: healthvault:latest
+    container_name: healthvault
+    restart: always
+    # Must match the host user that owns ./data (`id -u` / `id -g`).
+    user: "1000:1000"
+    ports:
+      - "3040:3040"
+    volumes:
+      - ./data:/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/data/health.db
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3040/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

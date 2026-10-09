@@ -144,3 +144,29 @@ bun run typecheck && bun test src/ && bun run build
 `/tmp/gen_demo_export.py` is a throwaway generator used for the numbers above (kept outside the
 repo): `python3 gen_demo_export.py <days> <hr_interval_min> <out.zip>`. Its 5-year output was
 uploaded twice — 572,946 rows inserted, then 0 inserted / 572,946 duplicates.
+
+## Docker
+
+The image runs `next start` on node 22 as the non-root `node` user (uid 1000) on port 3040. The
+database lives on the host at `./data/health.db` and is bind-mounted to `/data` in the container.
+
+```bash
+docker compose build                 # build healthvault:latest from the Dockerfile
+docker compose up -d                 # start (restart: always); http://localhost:3040
+docker compose logs -f healthvault   # follow logs
+docker compose ps                    # health status (healthcheck hits /)
+docker compose down                  # stop and remove the container (data/ is kept)
+```
+
+The container user is `1000:1000` in `docker-compose.yml`; it must match the owner of `./data`
+(check with `id -u` / `id -g`). If you change uid, `chown -R <uid>:<gid> data`.
+
+Backup (stop-free, SQLite WAL-safe copy via the sqlite CLI, or stop the container first):
+
+```bash
+docker compose stop healthvault && tar czf healthvault-data-$(date +%F).tgz data/ && docker compose start healthvault
+# or, while running (needs sqlite3 on the host):
+sqlite3 data/health.db ".backup 'healthvault-$(date +%F).db'"
+```
+
+Restore: `docker compose stop healthvault`, replace `data/` with the backup, `docker compose start healthvault`.
