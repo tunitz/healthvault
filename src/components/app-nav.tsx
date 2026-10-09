@@ -67,7 +67,7 @@ export function AppNav() {
         aria-label="Primary"
         className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:hidden"
       >
-        <ul className="mx-auto flex max-w-6xl items-stretch px-2 pb-[env(safe-area-inset-bottom)]">
+        <ul className="mx-auto flex max-w-6xl items-stretch px-2 pt-1 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
           {NAV.map(({ href, label, Icon }) => {
             const active = isActive(pathname, href);
             return (
@@ -76,7 +76,7 @@ export function AppNav() {
                   href={href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex min-h-14 min-w-11 flex-1 flex-col items-center justify-center gap-0.5 rounded-md text-[11px] font-medium transition-colors",
+                    "flex min-h-16 min-w-11 flex-1 flex-col items-center justify-center gap-0.5 rounded-md text-[11px] font-medium transition-colors",
                     active ? "text-primary" : "text-muted-foreground hover:text-foreground",
                   )}
                 >
