@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/logo";
 import { ActivityChart } from "@/components/activity-chart";
 import { SleepStackChart } from "@/components/sleep-stack-chart";
 import { StepsAreaChart } from "@/components/steps-area-chart";
@@ -31,6 +32,7 @@ export default function DashboardPage() {
   if (totals.records === 0) {
     return (
       <div className="flex flex-col items-start gap-4">
+        <Logo size={40} />
         <h1 className="text-2xl font-semibold tracking-tight">No health data yet</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
           Export your data on the iPhone: Health app → your picture → Export All Health Data, then

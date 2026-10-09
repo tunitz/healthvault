@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, Dumbbell, LayoutDashboard, Search, Upload } from "lucide-react";
+import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -30,7 +31,7 @@ export function AppNav() {
             href="/"
             className="flex items-center gap-2 rounded-md text-sm font-semibold tracking-tight text-foreground"
           >
-            <span aria-hidden className="size-2 rounded-full bg-primary" />
+            <Logo size={24} />
             Health Vault
           </Link>
 
