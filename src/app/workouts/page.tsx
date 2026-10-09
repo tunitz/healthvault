@@ -72,8 +72,8 @@ export default function WorkoutsPage() {
               <TableBody>
                 {workouts.map((w, i) => (
                   <TableRow key={`${w.startDate}-${i}`}>
-                    <TableCell className="num">{w.day}</TableCell>
-                    <TableCell>{workoutLabel(w.type)}</TableCell>
+                    <TableCell className="num"><span className="md:hidden">{w.day.slice(5)}</span><span className="hidden md:inline">{w.day}</span></TableCell>
+                    <TableCell><span className="block max-w-[7.5rem] truncate md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
                     <TableCell className="num text-right">{minutes(w.durationSeconds)}</TableCell>
                     <TableCell className="num text-right">
                       {w.totalDistance === null ? "—" : `${num(w.totalDistance, 2)} ${w.totalDistanceUnit ?? ""}`}

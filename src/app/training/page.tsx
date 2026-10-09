@@ -150,8 +150,8 @@ export default function TrainingPage() {
               const zone = hrZone(w.avgHr);
               return (
                 <TableRow key={`${w.startDate}-${i}`}>
-                  <TableCell className="num">{w.day}</TableCell>
-                  <TableCell>{workoutLabel(w.type)}</TableCell>
+                  <TableCell className="num"><span className="md:hidden">{w.day.slice(5)}</span><span className="hidden md:inline">{w.day}</span></TableCell>
+                  <TableCell><span className="block max-w-[7.5rem] truncate md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
                   <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
                   <TableCell className="num text-right">
                     {w.km === null ? "—" : `${num(w.km, 2)} km`}
