@@ -54,3 +54,9 @@ export function hrZone(hr: number | null | undefined): { label: string; classNam
 export function r2(v: number | null | undefined, digits = 2): string {
   return num(v, digits);
 }
+
+/** Count + noun with correct singular/plural: plural(1, "workout") → "1 workout",
+ * plural(2, "workout") → "2 workouts". `display` overrides the number text (e.g. compact). */
+export function plural(n: number, one: string, many = `${one}s`, display?: string): string {
+  return `${display ?? num(n, 0)} ${n === 1 ? one : many}`;
+}

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UploadForm } from "@/components/upload-form";
 import { recentUploads } from "@/db/queries";
@@ -14,7 +13,7 @@ const STEPS = [
   { n: "3", title: "Drop it below", body: "Rows already in the database are skipped, so re-importing the same export is safe." },
 ];
 
-const statusClass = (status: string) =>
+const statusVariant = (status: string) =>
   status === "done" ? "default" : status === "failed" ? "destructive" : "secondary";
 
 export default function UploadsPage() {
@@ -22,8 +21,8 @@ export default function UploadsPage() {
   const last = uploads[0];
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Import</h1>
         <p className="text-sm text-muted-foreground">
           Apple Health export → database. Nothing but <code>data/health.db</code> is written: the zip is parsed
@@ -31,83 +30,72 @@ export default function UploadsPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <ol className="grid gap-6 sm:grid-cols-3">
         {STEPS.map((s) => (
-          <Card key={s.n} className="border-l-4 border-l-sky-500/60 bg-card/60">
-            <CardHeader className="pb-2">
-              <CardDescription className="flex items-center gap-2">
-                <span className="flex size-5 items-center justify-center rounded-full bg-sky-500/20 text-xs font-semibold text-sky-300">
-                  {s.n}
-                </span>
-                {s.title}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <p className="text-xs text-muted-foreground">{s.body}</p>
-            </CardContent>
-          </Card>
+          <li key={s.n} className="flex flex-col gap-1 border-t border-border pt-3">
+            <p className="text-xs text-muted-foreground">Step {s.n}</p>
+            <p className="text-sm font-medium">{s.title}</p>
+            <p className="text-xs text-muted-foreground">{s.body}</p>
+          </li>
         ))}
-      </div>
+      </ol>
 
-      <Card className="overflow-hidden border-emerald-500/20 bg-gradient-to-b from-emerald-500/[0.07] to-transparent">
-        <CardHeader>
-          <CardTitle className="text-emerald-400">Import an export</CardTitle>
-          <CardDescription>
+      <section className="flex flex-col gap-4">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-sm font-medium">Import an export</h2>
+          <p className="text-xs text-muted-foreground">
             {last && last.status === "done"
               ? `Last import: ${num(last.recordsInserted)} rows on ${instant(last.createdAtMs)}.`
               : "No successful import yet."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <UploadForm />
-        </CardContent>
-      </Card>
+          </p>
+        </div>
+        <UploadForm />
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Import history</CardTitle>
-          <CardDescription>
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-sm font-medium">Import history</h2>
+          <p className="text-xs text-muted-foreground">
             Newest first, capped at 50. A re-import shows every row as a duplicate — that means it was already
             in the database.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {uploads.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground">
-              No imports yet. Start with step 1 above, then <Link className="text-emerald-400 underline" href="/training">check the Training page</Link>.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Started</TableHead>
-                  <TableHead>File</TableHead>
-                  <TableHead className="text-right">Size</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Inserted</TableHead>
-                  <TableHead className="text-right">Duplicates</TableHead>
-                  <TableHead>Message</TableHead>
+          </p>
+        </div>
+        {uploads.length === 0 ? (
+          <p className="py-6 text-sm text-muted-foreground">
+            No imports yet. Start with step 1 above, then{" "}
+            <Link className="text-primary underline underline-offset-4" href="/training">check the Training page</Link>.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Started</TableHead>
+                <TableHead>File</TableHead>
+                <TableHead className="text-right">Size</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Inserted</TableHead>
+                <TableHead className="text-right">Duplicates</TableHead>
+                <TableHead>Message</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {uploads.map((u, i) => (
+                <TableRow key={`${u.createdAtMs}-${i}`}>
+                  <TableCell className="num text-muted-foreground">{instant(u.createdAtMs)}</TableCell>
+                  <TableCell className="max-w-[220px] truncate">{u.filename}</TableCell>
+                  <TableCell className="num text-right">{bytes(u.bytes)}</TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
+                  </TableCell>
+                  <TableCell className="num text-right">{num(u.recordsInserted)}</TableCell>
+                  <TableCell className="num text-right text-muted-foreground">{num(u.recordsDuplicates)}</TableCell>
+                  <TableCell className="max-w-[280px] truncate text-muted-foreground">{u.message ?? "—"}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {uploads.map((u, i) => (
-                  <TableRow key={`${u.createdAtMs}-${i}`}>
-                    <TableCell className="tabular-nums text-muted-foreground">{instant(u.createdAtMs)}</TableCell>
-                    <TableCell className="max-w-[220px] truncate">{u.filename}</TableCell>
-                    <TableCell className="text-right tabular-nums">{bytes(u.bytes)}</TableCell>
-                    <TableCell>
-                      <Badge variant={statusClass(u.status)}>{u.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-emerald-300">{num(u.recordsInserted)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{num(u.recordsDuplicates)}</TableCell>
-                    <TableCell className="max-w-[280px] truncate text-muted-foreground">{u.message ?? "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </section>
     </div>
   );
 }

@@ -81,8 +81,8 @@ export function UploadForm() {
           setDragging(false);
           pick(e.dataTransfer.files?.[0] ?? null);
         }}
-        className={`flex flex-col items-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
-          dragging ? "border-emerald-400 bg-emerald-500/10" : "border-border bg-muted/30"
+        className={`flex w-full flex-col items-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center transition-colors sm:px-6 ${
+          dragging ? "border-primary bg-primary/5" : "border-border"
         }`}
       >
         <p className="text-sm font-medium">
@@ -100,33 +100,33 @@ export function UploadForm() {
           onChange={(e) => pick(e.target.files?.[0] ?? null)}
           className="sr-only"
         />
-        <div className="flex flex-wrap items-center justify-center gap-2">
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-center">
           <Button variant="outline" asChild>
             <label htmlFor="export-file" className="cursor-pointer">Choose file</label>
           </Button>
-          <Button onClick={submit} disabled={!file || busy} className="bg-emerald-600 text-white hover:bg-emerald-500">
+          <Button onClick={submit} disabled={!file || busy}>
             {busy ? <Spinner data-icon="inline-start" /> : null}
             {busy ? `Parsing… ${elapsed}s` : "Import"}
           </Button>
         </div>
         {busy ? (
           <div className="h-1 w-full max-w-sm overflow-hidden rounded-full bg-muted">
-            <div className="h-full w-1/3 animate-pulse rounded-full bg-emerald-500" />
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
           </div>
         ) : null}
       </div>
 
       {result ? (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
-          <p className="text-sm font-medium text-emerald-300">
+        <div className="flex flex-col gap-1 border-l-2 border-primary pl-4">
+          <p className="text-sm font-medium">
             Imported {result.inserted.toLocaleString("en-US")} rows from {result.filename}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {result.duplicates > 0
               ? `${result.duplicates.toLocaleString("en-US")} rows were already present and were skipped.`
               : "Nothing was duplicated."}
           </p>
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Button asChild size="sm">
               <Link href="/training">See training</Link>
             </Button>

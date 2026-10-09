@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -13,6 +12,16 @@ export type TypeStat = {
 };
 
 type Row = { day: string; startDate: string; endDate: string; value: number; unit: string; sourceName: string };
+
+function Metric({ title, value, unit }: { title: string; value: string; unit?: string }) {
+  return (
+    <div className="flex flex-col gap-1 border-t border-border pt-3">
+      <p className="text-xs text-muted-foreground">{title}</p>
+      <p className="num text-2xl font-semibold tracking-tight">{value}</p>
+      {unit ? <p className="text-xs text-muted-foreground">{unit}</p> : null}
+    </div>
+  );
+}
 
 export function ExplorerClient({ types }: { types: TypeStat[] }) {
   const [selected, setSelected] = useState(types[0]?.typeIdentifier ?? "");
@@ -39,13 +48,11 @@ export function ExplorerClient({ types }: { types: TypeStat[] }) {
   const stats = types.find((t) => t.typeIdentifier === selected);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">Explorer</h1>
-          <p className="text-sm text-muted-foreground">
-            {types.length} record types found in the export
-          </p>
+          <p className="text-sm text-muted-foreground">{types.length} record types found in the export</p>
         </div>
         <Select value={selected} onValueChange={setSelected}>
           <SelectTrigger className="w-full sm:w-[360px]">
@@ -62,80 +69,53 @@ export function ExplorerClient({ types }: { types: TypeStat[] }) {
       </div>
 
       {stats ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader>
-              <CardDescription>Records</CardDescription>
-              <CardTitle className="text-2xl tabular-nums">{num(stats.count)}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardDescription>Average</CardDescription>
-              <CardTitle className="text-2xl tabular-nums">{num(stats.avg, 2)}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">unit: {stats.unit || "—"}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardDescription>Max</CardDescription>
-              <CardTitle className="text-2xl tabular-nums">{num(stats.max, 2)}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardDescription>Date range</CardDescription>
-              <CardTitle className="text-base tabular-nums">
-                {stats.firstDay} → {stats.lastDay}
-              </CardTitle>
-            </CardHeader>
-          </Card>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
+          <Metric title="Records" value={num(stats.count)} />
+          <Metric title="Average" value={num(stats.avg, 2)} unit={`unit: ${stats.unit || "—"}`} />
+          <Metric title="Max" value={num(stats.max, 2)} />
+          <Metric title="Date range" value={`${stats.firstDay} → ${stats.lastDay}`} />
         </div>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Latest records</CardTitle>
-          <CardDescription>
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-sm font-medium">Latest records</h2>
+          <p className="text-xs text-muted-foreground">
             Newest 200 rows for {typeLabel(selected)}. Sleep stages are stored as codes: 1 In bed, 2 Asleep,
             3 Awake, 4 Core, 5 Deep, 6 REM.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Spinner /> Loading…
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Day</TableHead>
-                  <TableHead>Start</TableHead>
-                  <TableHead>End</TableHead>
-                  <TableHead className="text-right">Value</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead>Source</TableHead>
+          </p>
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+            <Spinner /> Loading…
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Day</TableHead>
+                <TableHead>Start</TableHead>
+                <TableHead className="hidden sm:table-cell">End</TableHead>
+                <TableHead className="text-right">Value</TableHead>
+                <TableHead>Unit</TableHead>
+                <TableHead className="hidden md:table-cell">Source</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r, i) => (
+                <TableRow key={`${r.startDate}-${i}`}>
+                  <TableCell className="num">{r.day}</TableCell>
+                  <TableCell className="num">{r.startDate}</TableCell>
+                  <TableCell className="num hidden sm:table-cell">{r.endDate}</TableCell>
+                  <TableCell className="num text-right">{num(r.value, 2)}</TableCell>
+                  <TableCell>{r.unit || "—"}</TableCell>
+                  <TableCell className="hidden text-muted-foreground md:table-cell">{r.sourceName || "—"}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r, i) => (
-                  <TableRow key={`${r.startDate}-${i}`}>
-                    <TableCell className="tabular-nums">{r.day}</TableCell>
-                    <TableCell className="tabular-nums">{r.startDate}</TableCell>
-                    <TableCell className="tabular-nums">{r.endDate}</TableCell>
-                    <TableCell className="text-right tabular-nums">{num(r.value, 2)}</TableCell>
-                    <TableCell>{r.unit || "—"}</TableCell>
-                    <TableCell>{r.sourceName || "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </section>
     </div>
   );
 }

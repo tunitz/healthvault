@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   FitnessTrendChart, HeartRateDailyChart, PaceTrendChart, StepsChart, WeeklyVolumeChart, WorkoutHrChart,
@@ -9,24 +8,27 @@ import {
   heartRateDaily, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta, vo2MaxDaily,
   weeklyTraining, workoutHistory, workoutTotals, workoutTrend,
 } from "@/db/queries";
-import { compact, hrZone, minutes, num, workoutLabel } from "@/lib/format";
+import { compact, hrZone, minutes, num, plural, workoutLabel } from "@/lib/format";
+
+const ZONE_TEXT: Record<string, string> = {
+  easy: "text-chart-1",
+  steady: "text-chart-2",
+  hard: "text-chart-4",
+  max: "text-destructive",
+};
 
 export const dynamic = "force-dynamic";
 
-function StatCard({ title, value, hint, accent, delta }: {
-  title: string; value: string; hint?: string; accent: string; delta?: string | null;
+function Metric({ title, value, hint, delta }: {
+  title: string; value: string; hint?: string; delta?: string | null;
 }) {
   return (
-    <Card className={`overflow-hidden border-l-4 ${accent} bg-card/60`}>
-      <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0">
-        {delta ? <p className="text-xs font-medium text-muted-foreground">{delta}</p> : null}
-        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-1 border-t border-border pt-3">
+      <p className="text-xs text-muted-foreground">{title}</p>
+      <p className="num text-2xl font-semibold tracking-tight">{value}</p>
+      {delta ? <p className="text-xs text-muted-foreground">{delta}</p> : null}
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
   );
 }
 
@@ -51,7 +53,7 @@ export default function TrainingPage() {
           No training data yet. Upload your Apple Health <code>Export.zip</code> and this page fills in with
           steps, heart rate, pace and weekly volume.
         </p>
-        <Link className="text-sm text-emerald-400 underline" href="/uploads">Go to upload</Link>
+        <Link className="text-sm text-primary underline underline-offset-4" href="/uploads">Go to Import</Link>
       </div>
     );
   }
@@ -77,8 +79,8 @@ export default function TrainingPage() {
   const devices = [...deviceMap.values()].sort((a, b) => b.hr + b.steps - (a.hr + a.steps));
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
         <p className="text-sm text-muted-foreground">
           Steps, heart rate, pace and volume. Each day is read from a single device — phone and watch overlap in
@@ -86,29 +88,25 @@ export default function TrainingPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          accent="border-l-emerald-500"
+      <div className="grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
+        <Metric
           title="Steps / day (90d)"
           value={compact(stepAvg)}
           hint={steps[0] ? `source: ${steps[0].source}` : undefined}
         />
-        <StatCard
-          accent="border-l-violet-500"
+        <Metric
           title="Distance (30d)"
           value={`${num(last30.km ?? 0, 1)} km`}
           delta={pct(delta.kmChangePct)}
-          hint={`${num(last30.sessions)} sessions · ${minutes((last30.minutes ?? 0) * 60)}`}
+          hint={`${plural(last30.sessions, "session")} · ${minutes((last30.minutes ?? 0) * 60)}`}
         />
-        <StatCard
-          accent="border-l-rose-500"
+        <Metric
           title="Avg workout HR (30d)"
           value={last30.avgHr === null ? "—" : `${num(last30.avgHr, 0)} bpm`}
           delta={delta.avgHrChange === null ? null : `${delta.avgHrChange >= 0 ? "+" : ""}${num(delta.avgHrChange, 1)} bpm vs previous 30 days`}
           hint={last30.maxHr === null ? undefined : `peak ${num(last30.maxHr, 0)} bpm`}
         />
-        <StatCard
-          accent="border-l-cyan-500"
+        <Metric
           title="Resting HR"
           value={restingLatest === undefined ? "—" : `${num(restingLatest, 0)} bpm`}
           delta={restingDelta === null ? null : `${restingDelta >= 0 ? "+" : ""}${num(restingDelta, 1)} bpm since ${resting[0]?.day}`}
@@ -118,7 +116,7 @@ export default function TrainingPage() {
 
       <StepsChart data={steps} />
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-10 lg:grid-cols-2">
         <WeeklyVolumeChart data={weekly} />
         <WorkoutHrChart data={runs} />
         <PaceTrendChart data={runs} />
@@ -127,83 +125,79 @@ export default function TrainingPage() {
 
       <HeartRateDailyChart data={hr} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent workouts</CardTitle>
-          <CardDescription>
-            Pace is derived from distance and duration; the heart-rate colour is the intensity band.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Day</TableHead>
-                <TableHead>Activity</TableHead>
-                <TableHead className="text-right">Time</TableHead>
-                <TableHead className="text-right">Distance</TableHead>
-                <TableHead className="text-right">Pace</TableHead>
-                <TableHead className="text-right">Avg HR</TableHead>
-                <TableHead className="text-right">Max HR</TableHead>
-                <TableHead className="text-right">Energy</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recent.map((w, i) => {
-                const zone = hrZone(w.avgHr);
-                return (
-                  <TableRow key={`${w.startDate}-${i}`}>
-                    <TableCell className="tabular-nums">{w.day}</TableCell>
-                    <TableCell>{workoutLabel(w.type)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
-                    <TableCell className="text-right tabular-nums text-violet-300">
-                      {w.km === null ? "—" : `${num(w.km, 2)} km`}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-amber-300">
-                      {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
-                    </TableCell>
-                    <TableCell className={`text-right tabular-nums ${zone.className}`}>
-                      {w.avgHr === null ? "—" : `${num(w.avgHr, 0)} ${zone.label}`}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-rose-300">
-                      {w.maxHr === null ? "—" : num(w.maxHr, 0)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Where the numbers come from</CardTitle>
-          <CardDescription>
-            Devices that recorded these metrics, so a surprising total can be traced to its origin.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-2">
-            {devices.map((d) => (
-              <Badge key={d.source} variant="secondary" className="gap-1">
-                <span className="text-emerald-400">{compact(d.steps)} steps</span>
-                <span className="text-muted-foreground">·</span>
-                <span className="text-rose-400">{compact(d.hr)} heart rate</span>
-                <span className="text-muted-foreground">·</span>
-                {d.source}
-              </Badge>
-            ))}
-          </div>
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-sm font-medium">Recent workouts</h2>
           <p className="text-xs text-muted-foreground">
-            Only one device is counted per day — the one with the most samples — so these are never added
-            together.
+            Pace is derived from distance and duration; the heart-rate colour is the intensity band.
           </p>
-        </CardContent>
-      </Card>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Day</TableHead>
+              <TableHead>Activity</TableHead>
+              <TableHead className="text-right">Time</TableHead>
+              <TableHead className="text-right">Distance</TableHead>
+              <TableHead className="text-right">Pace</TableHead>
+              <TableHead className="text-right">Avg HR</TableHead>
+              <TableHead className="text-right">Max HR</TableHead>
+              <TableHead className="text-right">Energy</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {recent.map((w, i) => {
+              const zone = hrZone(w.avgHr);
+              return (
+                <TableRow key={`${w.startDate}-${i}`}>
+                  <TableCell className="num">{w.day}</TableCell>
+                  <TableCell>{workoutLabel(w.type)}</TableCell>
+                  <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
+                  <TableCell className="num text-right">
+                    {w.km === null ? "—" : `${num(w.km, 2)} km`}
+                  </TableCell>
+                  <TableCell className="num text-right">
+                    {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
+                  </TableCell>
+                  <TableCell className={`num text-right ${ZONE_TEXT[zone.label] ?? ""}`}>
+                    {w.avgHr === null ? "—" : `${num(w.avgHr, 0)} ${zone.label}`}
+                  </TableCell>
+                  <TableCell className="num text-right">
+                    {w.maxHr === null ? "—" : num(w.maxHr, 0)}
+                  </TableCell>
+                  <TableCell className="num text-right">
+                    {w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-sm font-medium">Where the numbers come from</h2>
+          <p className="text-xs text-muted-foreground">
+            Devices that recorded these metrics, so a surprising total can be traced to its origin.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {devices.map((d) => (
+            <Badge key={d.source} variant="outline" className="gap-1.5 px-2.5 py-1 font-normal">
+              <span className="num text-foreground">{compact(d.steps)} steps</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="num text-foreground">{compact(d.hr)} heart rate</span>
+              <span className="text-muted-foreground">·</span>
+              {d.source}
+            </Badge>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Only one device is counted per day — the one with the most samples — so these are never added
+          together.
+        </p>
+      </section>
     </div>
   );
 }

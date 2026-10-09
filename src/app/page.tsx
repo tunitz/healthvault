@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ActivityChart } from "@/components/activity-chart";
 import { SleepStackChart } from "@/components/sleep-stack-chart";
 import { StepsAreaChart } from "@/components/steps-area-chart";
@@ -13,25 +12,17 @@ import {
   sleepSummary,
   stepsSummary,
 } from "@/db/queries";
-import { compact, num } from "@/lib/format";
+import { compact, num, plural } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-function StatCard({ title, value, hint, accent, valueClass }: {
-  title: string; value: string; hint?: string; accent: string; valueClass?: string;
-}) {
+function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <Card className={`overflow-hidden border-l-4 ${accent} bg-card/60`}>
-      <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className={`text-3xl tabular-nums ${valueClass ?? ""}`}>{value}</CardTitle>
-      </CardHeader>
-      {hint ? (
-        <CardContent className="pt-0">
-          <p className="text-xs text-muted-foreground">{hint}</p>
-        </CardContent>
-      ) : null}
-    </Card>
+    <div className="flex flex-col gap-1 border-t border-border pt-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="num text-2xl font-semibold tracking-tight">{value}</p>
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
   );
 }
 
@@ -43,10 +34,10 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold tracking-tight">No health data yet</h1>
         <p className="max-w-prose text-sm text-muted-foreground">
           Export your data on the iPhone: Health app → your picture → Export All Health Data, then
-          upload the resulting <code>Export.zip</code> here.
+          import the resulting <code>Export.zip</code> on the Import page.
         </p>
         <Button asChild>
-          <Link href="/uploads">Go to upload</Link>
+          <Link href="/uploads">Go to Import</Link>
         </Button>
       </div>
     );
@@ -60,41 +51,33 @@ export default function DashboardPage() {
   const activitySeries = activitySummarySeries(30);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="text-sm text-muted-foreground">
-          {compact(totals.records)} records · {num(totals.workouts)} workouts · {num(totals.summaries)} activity
-          days · {num(totals.uploads)} uploads
+          {plural(totals.records, "record", "records", compact(totals.records))} · {plural(totals.workouts, "workout")} ·{" "}
+          {plural(totals.summaries, "activity day")} · {plural(totals.uploads, "upload")}
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          accent="border-l-emerald-500"
-          valueClass="text-emerald-400"
-          title="Steps (last 30 days)"
+      <div className="grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
+        <Metric
+          label="Steps (last 30 days)"
           value={compact(steps.totalInWindow)}
           hint={`${num(steps.avgPerDay)} / day average · ${compact(steps.allTimeSteps)} all time`}
         />
-        <StatCard
-          accent="border-l-violet-500"
-          valueClass="text-violet-400"
-          title="Sleep (last 30 days)"
+        <Metric
+          label="Sleep (last 30 days)"
           value={`${num(sleep.avgPerNight)} h`}
-          hint={`${num(sleep.nights)} nights · ${num(sleep.totalHours)} h total`}
+          hint={`${plural(sleep.nights, "night")} · ${num(sleep.totalHours)} h total`}
         />
-        <StatCard
-          accent="border-l-amber-500"
-          valueClass="text-amber-400"
-          title="Active energy (last 30 days)"
+        <Metric
+          label="Active energy (last 30 days)"
           value={`${compact(activity.energy)} kcal`}
-          hint={`${num(activity.exerciseMinutes)} exercise min · ${num(activity.days)} summary days`}
+          hint={`${num(activity.exerciseMinutes)} exercise min · ${plural(activity.days, "summary day")}`}
         />
-        <StatCard
-          accent="border-l-sky-500"
-          valueClass="text-sky-400"
-          title="Move minutes (last 30 days)"
+        <Metric
+          label="Move minutes (last 30 days)"
           value={compact(activity.moveMinutes)}
           hint="Apple Move minutes from activity summaries"
         />
