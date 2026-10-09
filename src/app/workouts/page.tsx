@@ -62,11 +62,11 @@ export default function WorkoutsPage() {
                   <TableHead>Activity</TableHead>
                   <TableHead className="text-right">Duration</TableHead>
                   <TableHead className="text-right">Distance</TableHead>
-                  <TableHead className="text-right">Pace</TableHead>
-                  <TableHead className="text-right">Avg HR</TableHead>
-                  <TableHead className="text-right">Max HR</TableHead>
-                  <TableHead className="text-right">Energy</TableHead>
-                  <TableHead>Source</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Pace</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Avg HR</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Max HR</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Energy</TableHead>
+                  <TableHead className="hidden md:table-cell">Source</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -78,21 +78,21 @@ export default function WorkoutsPage() {
                     <TableCell className="num text-right">
                       {w.totalDistance === null ? "—" : `${num(w.totalDistance, 2)} ${w.totalDistanceUnit ?? ""}`}
                     </TableCell>
-                    <TableCell className="num text-right">
+                    <TableCell className="num hidden text-right md:table-cell">
                       {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
                     </TableCell>
-                    <TableCell className={`num text-right ${ZONE_TEXT[hrZone(w.avgHr).label] ?? ""}`}>
+                    <TableCell className={`num hidden text-right md:table-cell ${ZONE_TEXT[hrZone(w.avgHr).label] ?? ""}`}>
                       {w.avgHr === null ? "—" : num(w.avgHr, 0)}
                     </TableCell>
-                    <TableCell className="num text-right">
+                    <TableCell className="num hidden text-right md:table-cell">
                       {w.maxHr === null ? "—" : num(w.maxHr, 0)}
                     </TableCell>
-                    <TableCell className="num text-right">
+                    <TableCell className="num hidden text-right md:table-cell">
                       {w.totalEnergyBurned === null
                         ? "—"
                         : `${num(w.totalEnergyBurned)} ${w.totalEnergyBurnedUnit ?? ""}`}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{w.sourceName ?? "—"}</TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">{w.sourceName ?? "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

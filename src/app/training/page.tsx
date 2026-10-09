@@ -139,10 +139,10 @@ export default function TrainingPage() {
               <TableHead>Activity</TableHead>
               <TableHead className="text-right">Time</TableHead>
               <TableHead className="text-right">Distance</TableHead>
-              <TableHead className="text-right">Pace</TableHead>
-              <TableHead className="text-right">Avg HR</TableHead>
-              <TableHead className="text-right">Max HR</TableHead>
-              <TableHead className="text-right">Energy</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Pace</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Avg HR</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Max HR</TableHead>
+              <TableHead className="hidden text-right md:table-cell">Energy</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -156,16 +156,16 @@ export default function TrainingPage() {
                   <TableCell className="num text-right">
                     {w.km === null ? "—" : `${num(w.km, 2)} km`}
                   </TableCell>
-                  <TableCell className="num text-right">
+                  <TableCell className="num hidden text-right md:table-cell">
                     {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
                   </TableCell>
-                  <TableCell className={`num text-right ${ZONE_TEXT[zone.label] ?? ""}`}>
+                  <TableCell className={`num hidden text-right md:table-cell ${ZONE_TEXT[zone.label] ?? ""}`}>
                     {w.avgHr === null ? "—" : `${num(w.avgHr, 0)} ${zone.label}`}
                   </TableCell>
-                  <TableCell className="num text-right">
+                  <TableCell className="num hidden text-right md:table-cell">
                     {w.maxHr === null ? "—" : num(w.maxHr, 0)}
                   </TableCell>
-                  <TableCell className="num text-right">
+                  <TableCell className="num hidden text-right md:table-cell">
                     {w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}
                   </TableCell>
                 </TableRow>
