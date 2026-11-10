@@ -1,12 +1,19 @@
 /**
  * Thin HTTP client for the HealthVault agent API.
  *
- * The OpenCode plugin never touches SQLite directly: every tool goes through
- * `POST /api/agent/<tool>`, the same service layer the web UI uses.
+ * The MCP server never touches SQLite directly: every tool goes through
+ * `POST /api/agent/<tool>`, the same service layer the web UI uses. Every
+ * request carries the shared bearer token the app requires.
  */
+
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:3040";
 export const DEFAULT_TIMEOUT_MS = 15_000;
+/** Default token file, kept tilde-form so error messages stay readable. */
+export const DEFAULT_TOKEN_FILE = "~/.config/healthvault/token";
 
 const START_HINT = "systemctl --user start healthvault";
 const STATUS_HINT = "systemctl --user status healthvault";
@@ -16,6 +23,12 @@ export interface ServerOptions {
   baseUrl?: string;
   /** Per-request timeout in milliseconds. Defaults to `HEALTHVAULT_TIMEOUT_MS` or 15000. */
   timeoutMs?: number;
+  /**
+   * Bearer token, or a provider read on every request so a freshly written token
+   * file is picked up without restarting the client. When omitted, the token is
+   * resolved from `HEALTHVAULT_TOKEN` and then `HEALTHVAULT_TOKEN_FILE`.
+   */
+  token?: string | null | (() => string | undefined);
   /** Injectable fetch, mainly for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -66,6 +79,56 @@ export function resolveTimeoutMs(timeoutMs?: number): number {
   );
 }
 
+/** Expand a leading `~` or `~/` to the user's home directory. */
+export function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+/** The token file path, as configured, with `~` expanded for file reads. */
+export function resolveTokenFile(): string {
+  return expandHome(nonEmptyString(process.env.HEALTHVAULT_TOKEN_FILE) ?? DEFAULT_TOKEN_FILE);
+}
+
+/**
+ * Token resolution order: `HEALTHVAULT_TOKEN`, then the token file
+ * (`HEALTHVAULT_TOKEN_FILE`, default `~/.config/healthvault/token`), trimmed.
+ * Returns undefined when neither is available; the caller fails the tool call
+ * with an actionable message instead of crashing at startup.
+ */
+export function resolveToken(): string | undefined {
+  const fromEnv = nonEmptyString(process.env.HEALTHVAULT_TOKEN);
+  if (fromEnv) return fromEnv;
+
+  try {
+    const fromFile = readFileSync(resolveTokenFile(), "utf8").trim();
+    return fromFile || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The path shown in error messages, kept in tilde-form when it is the default. */
+function displayTokenFile(): string {
+  return nonEmptyString(process.env.HEALTHVAULT_TOKEN_FILE) ?? DEFAULT_TOKEN_FILE;
+}
+
+export function missingTokenMessage(): string {
+  return (
+    `HealthVault bearer token is not set — write it to ${displayTokenFile()} (chmod 600) ` +
+    `or set HEALTHVAULT_TOKEN, then restart the MCP client.`
+  );
+}
+
+function tokenRejectedMessage(tool: string, status: number): string {
+  return (
+    `HealthVault tool "${tool}" failed (${status}): bearer token rejected — ` +
+    `check the token file (${displayTokenFile()}) or HEALTHVAULT_TOKEN, ` +
+    `then restart the MCP client.`
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -91,13 +154,28 @@ function errorMessage(payload: unknown, text: string): string | undefined {
   return fallback.slice(0, 500);
 }
 
+function tokenSource(option: ServerOptions["token"]): () => string | undefined {
+  if (typeof option === "function") return option;
+  if (typeof option === "string") {
+    const token = nonEmptyString(option);
+    return () => token;
+  }
+  return resolveToken;
+}
+
 export function createServer(options: ServerOptions = {}): HealthVaultServer {
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
   const doFetch = options.fetchImpl ?? fetch;
+  const getToken = tokenSource(options.token);
 
   async function request<T>(tool: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
     const url = `${baseUrl}/api/agent/${encodeURIComponent(tool)}`;
+    const token = getToken();
+    if (!token) {
+      throw new HealthVaultError(missingTokenMessage(), { tool });
+    }
+
     const controller = new AbortController();
     let timedOut = false;
 
@@ -117,6 +195,7 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
         headers: {
           "content-type": "application/json",
           accept: "application/json",
+          authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(body ?? {}),
         signal: controller.signal,
@@ -124,6 +203,13 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
 
       const text = await response.text();
       const payload = parsePayload(text);
+
+      if (response.status === 401 || response.status === 403) {
+        throw new HealthVaultError(tokenRejectedMessage(tool, response.status), {
+          status: response.status,
+          tool,
+        });
+      }
 
       if (!response.ok) {
         const message =
@@ -159,8 +245,8 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
       }
 
       throw new HealthVaultError(
-        `Cannot reach HealthVault at ${baseUrl}. Start it with "${START_HINT}" ` +
-          `(or check "${STATUS_HINT}").`,
+        `HealthVault service is not reachable at ${baseUrl} — start it with: ${START_HINT} ` +
+          `(check it with "${STATUS_HINT}").`,
         { tool, reason: error },
       );
     } finally {
