@@ -10,10 +10,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:backup": "bun scripts/backup-db.ts",
-    "seed": "bun scripts/seed-fixture.ts",
-    "predev": "bun scripts/check-native.ts",
-    "dev:webpack": "bun --bun next dev --webpack"
+    "db:backup": "bun scripts/backup-db.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

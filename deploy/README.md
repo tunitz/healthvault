@@ -37,15 +37,28 @@ DATABASE_PATH=/tmp/healthvault-build/health.db bun run build
 
 ## Service unit
 
-The tracked definition is `deploy/systemd/healthvault.service`. Install it as a
-user unit and reload systemd:
+The tracked definitions are `deploy/systemd/healthvault.service`,
+`deploy/systemd/healthvault-backup.service` and `deploy/systemd/healthvault-backup.timer`. Install
+them as user units and reload systemd:
 
 ```bash
 ln -sfn /home/tunitz/projects/healthvault/deploy/systemd/healthvault.service \
   ~/.config/systemd/user/healthvault.service
+ln -sfn /home/tunitz/projects/healthvault/deploy/systemd/healthvault-backup.service \
+  ~/.config/systemd/user/healthvault-backup.service
+ln -sfn /home/tunitz/projects/healthvault/deploy/systemd/healthvault-backup.timer \
+  ~/.config/systemd/user/healthvault-backup.timer
 systemctl --user daemon-reload
 systemctl --user restart healthvault
+systemctl --user enable --now healthvault-backup.timer
 ```
+
+The app unit requires the auth credentials and fails fast without them:
+`EnvironmentFile=%h/.config/healthvault/auth.env` (0600: `HEALTHVAULT_PASSWORD_HASH`,
+`HEALTHVAULT_SESSION_SECRET`, optional `HEALTHVAULT_COOKIE_SECURE` / `HEALTHVAULT_SESSION_DAYS`) and
+`HEALTHVAULT_API_TOKEN_FILE=%h/.config/healthvault/token` (0600). `UMask=0077` keeps files created
+by the service owner-only. The backup timer runs `bun run db:backup` daily at 03:30 (persistent
+catch-up) and prunes backups older than 14 days.
 
 Do not commit `.next/`, `data/`, or `node_modules/`.
 
@@ -63,21 +76,43 @@ Restore: stop the service, replace `data/health.db`, remove stale `health.db-wal
 `health.db-shm` files, then start the service. The data directory should stay mode 700 and the
 database 600.
 
+## TLS
+
+Plain HTTP exposes the password and bearer token in transit on the LAN. For anything beyond a
+trusted network, terminate TLS in front of the service (see `deploy/Caddyfile.example`) and set
+`HEALTHVAULT_COOKIE_SECURE=1` in `~/.config/healthvault/auth.env` so the session cookie is
+Secure-only.
+
 ## Agent API
 
 `POST /api/agent/<tool>` (JSON in/out) serves the profile, measurements, food log, nutrition,
-supplements and read-only health metrics. It is intentionally unauthenticated on the LAN-bound
-service. `GET /api/agent` lists tools. The OpenCode plugin in `plugins/opencodev2/` talks to
-`http://127.0.0.1:3040`; if it reports a connection error, start the service with
-`systemctl --user start healthvault`.
+supplements and read-only health metrics. It requires `Authorization: Bearer <token>` — the token
+in `~/.config/healthvault/token` (or `HEALTHVAULT_API_TOKEN`); cookies are not accepted on this
+surface. `GET /api/agent` lists the tools (same bearer). The MCP server in `plugins/healthvault/`
+(reads the same token file) is the canonical agent transport; if a tool reports a connection
+error, start the service with `systemctl --user start healthvault`.
 
 ## Verification after deploy
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/
-curl -s http://127.0.0.1:3040/api/agent | head -c 400
+# public health, no auth
+curl -s http://127.0.0.1:3040/api/health                          # {"ok":true}
+# anonymous page -> redirect to /login
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:3040/
+# anonymous API -> 401
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/api/type-stats
+# agent: wrong/missing token -> 401, valid bearer -> 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/api/agent
 curl -s -X POST http://127.0.0.1:3040/api/agent/healthvault_context \
-  -H 'content-type: application/json' -d '{}' | head -c 400
+  -H "authorization: Bearer $(cat ~/.config/healthvault/token)" \
+  -H 'content-type: application/json' -d '{}' | head -c 200
+# login round-trip
+curl -s -c /tmp/hv.jar -X POST http://127.0.0.1:3040/api/auth/login \
+  -H 'content-type: application/json' -d '{"password":"..."}'   # {"ok":true}
+curl -s -b /tmp/hv.jar -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/   # 200
+rm -f /tmp/hv.jar
+# backup timer armed
+systemctl --user list-timers healthvault-backup.timer
 ```
 
 Migrations run on boot; adding the tracking tables is additive and leaves the imported Apple

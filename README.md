@@ -4,7 +4,8 @@ Single-user web app: upload an Apple Health `Export.zip`, it is parsed into SQLi
 browsed in a Next.js dashboard (shadcn components + recharts).
 
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
-**shadcn** (radix + nova preset). No auth, no cloud, one local database file.
+**shadcn** (radix + nova preset). Single-user login (password + session cookie), bearer-token agent
+API, no cloud, one local database file.
 
 ## What it tracks
 
@@ -25,12 +26,54 @@ Every "today"/"last N days" boundary uses the profile's IANA timezone (`Asia/Sha
 not SQLite's UTC `date('now')` — the two disagree by 8 hours here, which used to hide the current
 day's rows from rolling windows. Timestamps in the UI are local wall-clock, not UTC.
 
-## Agent API
+## Authentication
+
+Single-user, two credentials, no user table. There is **no auth-off mode**: the server refuses to
+boot without valid credentials.
+
+| Credential | Used by | Stored in |
+|---|---|---|
+| Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in `~/.config/healthvault/auth.env` (0600) |
+| Bearer token (`Authorization: Bearer`) | agents / MCP clients on `/api/agent/*` | `~/.config/healthvault/token` (0600); `HEALTHVAULT_API_TOKEN` env wins (Docker/remote) |
+
+`/api/agent/*` accepts **only** the bearer token (no cookies), which removes CSRF from the agent
+surface. Everything else requires the session cookie: unauthenticated pages redirect to `/login`,
+unauthenticated API calls get 401. Login is throttled (5 failures / 15 min → 429). `GET /api/health`
+is public and returns `{"ok":true}` only.
+
+Environment variables: `DATABASE_PATH`, `HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET`,
+`HEALTHVAULT_API_TOKEN`, `HEALTHVAULT_API_TOKEN_FILE`, `HEALTHVAULT_COOKIE_SECURE` (set `1` behind
+TLS), `HEALTHVAULT_SESSION_DAYS`.
+
+**Change the password** (the initial deploy may use a placeholder):
+
+```bash
+read -rsp "Password: " pw; echo
+bun -e 'const c=require("node:crypto");const s=c.randomBytes(16);const h=c.scryptSync(process.argv[1],s,32,{N:16384,r:8,p:1});console.log(`HEALTHVAULT_PASSWORD_HASH=scrypt:16384:8:1:${s.toString("hex")}:${h.toString("hex")}`)' "$pw"
+unset pw
+```
+
+Replace the `HEALTHVAULT_PASSWORD_HASH=` line in `~/.config/healthvault/auth.env` with the printed
+line, then `systemctl --user restart healthvault`. Existing sessions stay valid until they expire;
+bump `HEALTHVAULT_SESSION_SECRET` (and restart) to invalidate them all. Rotating the bearer token:
+overwrite `~/.config/healthvault/token`, restart the service, and restart MCP clients.
+
+## Agent API and MCP
 
 `POST /api/agent/<tool>` takes a JSON object and returns `{ ok: true, tool, result }`, or
-`{ ok: false, tool, error }` with 400/404/409/500. `GET /api/agent` lists the tools. It is bound to
-the same LAN-facing server as the UI and deliberately has **no authentication** (single-user,
-local-only posture); do not expose port 3040 to the internet.
+`{ ok: false, tool, error }` with 400/401/404/409/500. `GET /api/agent` lists the tools. Both
+require `Authorization: Bearer <token>` (see above); do not expose port 3040 to the internet.
+
+The canonical agent transport is the **MCP server** in `plugins/healthvault/` — one stdio server
+every harness can run (OpenCode, Claude Code, Claude Desktop, Cursor, …). Install and configure it
+once:
+
+```bash
+bun install -g /home/tunitz/projects/healthvault/plugins/healthvault
+```
+
+See `plugins/healthvault/README.md` for per-harness config snippets. Clients with no MCP support can
+call `POST /api/agent/<tool>` directly with the bearer token.
 
 **Reads** — `healthvault_context`, `profile_get`, `measurement_history`, `food_search`,
 `nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`, `metrics_series`,
@@ -61,19 +104,7 @@ and percent; never more than two decimals.
 
 `healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
 the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data
-freshness (last import, last record day). The OpenCode plugin lives in `plugins/opencodev2/`; register
-it once in the global `~/.config/opencode/opencode.jsonc` so every project gets the tools:
-
-```jsonc
-{
-  "plugins": [
-    {
-      "package": "/home/tunitz/projects/healthvault/plugins/opencodev2",
-      "options": { "baseUrl": "http://127.0.0.1:3040" }
-    }
-  ]
-}
-```
+freshness (last import, last record day).
 
 ## Upgrading from an earlier import
 
@@ -113,7 +144,7 @@ indexes — Apple does emit some. Re-importing the same file inserts 0 and repor
 
 **Nothing is written to disk except `data/health.db`.** The upload is read into memory, the XML is inflated
 and parsed as a stream, and rows go straight into SQLite — no temp file, no extracted `export.xml`, and no
-copy of the zip anywhere. `src/test/ingest.test.ts` asserts exactly that, so it cannot regress silently.
+copy of the zip anywhere.
 
 Where the time goes (instrumented, 410 MB XML): **XML+inflate 29 s**, SQLite ~5 s. That is why the DB side
 uses raw prepared statements rather than the query builder — see the note at the top of `src/lib/ingest.ts`.
@@ -145,10 +176,14 @@ bun run db:generate                  # only after editing src/db/schema.ts
 bun run dev                          # http://localhost:3000
 ```
 
-`bun run build && bun run start` for production. The database file defaults to `./data/health.db`
+`bun run build && bun run start` for production. Dev and start both fail fast without credentials:
+provide `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` (env or
+`~/.config/healthvault/auth.env` on this host) and a bearer token
+(`~/.config/healthvault/token` or `HEALTHVAULT_API_TOKEN`). `next build` itself needs none.
+The database file defaults to `./data/health.db`
 (git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. Migrations run on every
 boot inside `src/db/index.ts` (`migrate()` from the drizzle better-sqlite3 migrator) — a fresh file
-is brought up to schema automatically, which is also how the tests get their tables.
+is brought up to schema automatically.
 
 The database file is created **mode 600** and its directory **mode 700** (health data is private).
 
@@ -161,17 +196,61 @@ bun run db:backup                                  # data/backups/health-<timest
 bun run db:backup /path/to/health-2026-11-10.db    # explicit destination
 ```
 
-It runs `PRAGMA integrity_check` first, writes the copy mode 600, and prints the size. Restore by
+It runs `PRAGMA integrity_check` first, writes the copy mode 600, and prints the size. On the host,
+`healthvault-backup.timer` runs this daily (03:30, persistent catch-up) and prunes backups older
+than 14 days. Restore by
 stopping the service, replacing `data/health.db` (and deleting any `-wal`/`-shm` sidecars), then
 starting it again.
 
 ## Security posture
 
-The service listens on `0.0.0.0:3040` so the phone/PWA can reach it, and has no login by design.
-That means any device on the LAN can read and write health data. Keep it on a trusted network; do
-not port-forward it. Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`,
-`X-Content-Type-Options: nosniff` and a `Referrer-Policy: no-referrer`; the service worker never
-caches `/api/*`.
+The service listens on `0.0.0.0:3040` so the phone/PWA can reach it. Every route is protected:
+the UI by the session cookie, `/api/agent/*` by the bearer token. Over plain HTTP both credentials
+cross the LAN in clear text — keep the service on a trusted network, or put TLS in front
+(`deploy/Caddyfile.example`, then set `HEALTHVAULT_COOKIE_SECURE=1`). Do not port-forward it.
+Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, COOP/CORP `same-origin` and a report-only CSP; the service worker
+never caches `/login`, `/api/auth/*` or any `/api/*`. Logout clears the cookie, site caches and
+storage (`Clear-Site-Data`). Known tradeoff: pages cached by the PWA while authenticated remain
+readable offline on that device until logout clears them.
+
+There are **no committed tests**: the test suites were removed deliberately (single-user local
+tool). Verification is `bun run typecheck && bun run lint && bun run build` plus the live checks in
+`deploy/README.md`. Do not read the missing tests as a safety net that still exists.
+
+## Installation (host, systemd)
+
+```bash
+# 1. credentials (once)
+mkdir -p ~/.config/healthvault && chmod 700 ~/.config/healthvault
+openssl rand -hex 32 > ~/.config/healthvault/token && chmod 600 ~/.config/healthvault/token
+#    password hash + session secret -> ~/.config/healthvault/auth.env (0600);
+#    see "Change the password" above and .env.example for the exact format.
+
+# 2. build
+cd /home/tunitz/projects/healthvault
+bun install && bun run build
+
+# 3. service units (user units; the service fails fast if credentials are missing)
+ln -sfn "$PWD/deploy/systemd/healthvault.service" ~/.config/systemd/user/healthvault.service
+ln -sfn "$PWD/deploy/systemd/healthvault-backup.service" ~/.config/systemd/user/healthvault-backup.service
+ln -sfn "$PWD/deploy/systemd/healthvault-backup.timer" ~/.config/systemd/user/healthvault-backup.timer
+systemctl --user daemon-reload
+systemctl --user enable --now healthvault healthvault-backup.timer
+
+# 4. MCP server for agents (once, per host)
+bun install -g /home/tunitz/projects/healthvault/plugins/healthvault
+#    then add the harness config; see plugins/healthvault/README.md
+
+# 5. verify
+curl -s http://127.0.0.1:3040/api/health          # {"ok":true} without auth
+#    open http://<lan-ip>:3040 -> redirects to /login
+```
+
+**Upgrade:** `bun run db:backup && systemctl --user stop healthvault && git pull && bun install &&
+bun run build && systemctl --user start healthvault`, then smoke-test (`/api/health`, login, one
+MCP read). The backup timer runs daily with 14-day retention. **Rollback:** `git checkout <sha>`,
+rebuild, restart — auth adds no migration, so the database is unaffected.
 
 ## Ingest design (why it streams)
 
@@ -209,17 +288,21 @@ src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summar
                      supplements, supplement_logs
 src/db/index.ts      sqlite connection + migrate-on-boot + private file modes
 src/db/queries.ts    aggregate SQL (single-source-per-day, local-day windows)
+src/lib/auth.ts      scrypt verify, session cookie sign/verify, bearer check, throttle
+src/lib/auth-config.ts  credential loading + fail-fast validation
 src/lib/day.ts       timezone helpers: local day, windows, formatting
 src/lib/xml.ts       incremental Apple Health XML parser (+ <Me>)
 src/lib/ingest.ts    streaming ingest + profile prefill
 src/lib/services/    profile, measurements, nutrition, supplements, context
-src/app/             dashboard (/), training, workouts, explorer, uploads,
-                     profile, nutrition, supplements + api/upload, api/type-stats, api/agent
-src/components/      charts, explorer client, upload form, app nav, ui/* (shadcn)
-src/test/            fixture XML + parser/ingest/route/service tests (bun test)
-scripts/seed-fixture.ts   load the test fixture into the database
-scripts/backup-db.ts      WAL-safe online backup
-plugins/opencodev2/       OpenCode plugin exposing the agent API as tools
+src/proxy.ts         Next 16 Proxy: session gate, public allowlist, no-store caching
+src/instrumentation.ts  boot-time credential validation
+src/app/             dashboard (/), login, training, workouts, explorer, uploads,
+                     profile, nutrition, supplements + api/auth, api/health,
+                     api/upload, api/type-stats, api/agent
+src/components/      charts, explorer client, upload form, login form, app nav, ui/* (shadcn)
+scripts/backup-db.ts WAL-safe online backup (the only ops script)
+plugins/healthvault/ MCP stdio server exposing the agent API to any harness
+deploy/              systemd units, backup timer, Caddyfile.example, deploy README
 ```
 
 ## Troubleshooting
@@ -228,18 +311,26 @@ plugins/opencodev2/       OpenCode plugin exposing the agent API as tools
 of saying the native sqlite module could not be loaded. It is never a code bug. Causes, in order:
 
 1. **bun is older than 1.4** — 1.3.x panics on better-sqlite3 v13 (`NAPI FATAL ERROR`). Fix: `bun upgrade`.
-2. **The install is broken or mixed** — check with `bun scripts/check-native.ts` (also runs as `predev`,
-   printing platform, `prebuilds/` and which lockfiles are present), then reinstall cleanly **with bun**:
+2. **The install is broken or mixed** — reinstall cleanly **with bun**:
    `rm -rf node_modules .next && bun install && bun run dev`. Mixing npm/pnpm/yarn lockfiles leaves a
    layout Turbopack cannot resolve native modules from.
-3. **If the module loads fine and dev still fails**, it is Turbopack's externals handling, not your
-   install: use the webpack dev server instead — `bun run dev:webpack`.
+
+**Server exits at boot with a credential error** — fail-fast auth validation. Check
+`~/.config/healthvault/auth.env` (`HEALTHVAULT_PASSWORD_HASH` in `scrypt:N:r:p:salt:hash` form,
+`HEALTHVAULT_SESSION_SECRET` ≥ 32 chars) and `~/.config/healthvault/token`; for Docker, `.env`.
+
+**MCP tools return 401** — the bearer token changed or is missing: check
+`~/.config/healthvault/token`, then restart the MCP client/harness. **Connection refused** — start
+the service: `systemctl --user start healthvault`.
 
 ## Verify
 
 ```bash
-bun run typecheck && bun test src/ && bun run build
+bun run typecheck && bun run lint && bun run build
 ```
+
+There are no committed test suites (removed by design — see Security posture). After any deploy,
+run the live checks in `deploy/README.md` ("Verification after deploy").
 
 ## Generate a big synthetic export (load testing)
 
@@ -251,12 +342,17 @@ uploaded twice — 572,946 rows inserted, then 0 inserted / 572,946 duplicates.
 
 The image runs `next start` on node 22 as the non-root `node` user (uid 1000) on port 3040. The
 database lives on the host at `./data/health.db` and is bind-mounted to `/data` in the container.
+Auth is mandatory: copy `.env.example` to `.env` (git-ignored), set
+`HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET` and either `HEALTHVAULT_API_TOKEN` or
+the read-only token mount (`~/.config/healthvault/token` → `/run/healthvault/token`), or the
+container exits at boot.
 
 ```bash
+cp .env.example .env && $EDITOR .env
 docker compose build                 # build healthvault:latest from the Dockerfile
 docker compose up -d                 # start (restart: always); http://localhost:3040
 docker compose logs -f healthvault   # follow logs
-docker compose ps                    # health status (healthcheck hits /)
+docker compose ps                    # health status (healthcheck hits /api/health)
 docker compose down                  # stop and remove the container (data/ is kept)
 ```
 
