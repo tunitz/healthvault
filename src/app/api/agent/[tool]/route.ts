@@ -17,6 +17,7 @@ import {
   nutritionRange,
   resolveTargets,
   searchFoods,
+  setTargets,
   updateEntry,
 } from "@/lib/services/nutrition";
 import { ageOf, getProfile, suggestedTargets, updateProfile } from "@/lib/services/profile";
@@ -25,6 +26,7 @@ import {
   listSupplements,
   logSupplement,
   todayChecklist,
+  updateSupplement,
 } from "@/lib/services/supplements";
 import { workoutHistory } from "@/db/queries";
 import { currentDay } from "@/lib/services/context";
@@ -83,8 +85,11 @@ const TOOLS = {
     return { days, targets: resolveTargets(currentDay()), perDay };
   },
 
+  nutrition_target_set: (body: Record<string, unknown>) => setTargets(body),
+
   supplement_list: () => ({ supplements: listSupplements(false), checklist: todayChecklist() }),
   supplement_create: (body: Record<string, unknown>) => createSupplement(body),
+  supplement_update: (body: Record<string, unknown>) => updateSupplement(body.supplementId ?? body.id, body),
   supplement_log: (body: Record<string, unknown>) => logSupplement(body),
 
   metrics_series: (body: Record<string, unknown>) => metricsSeries(body.metric, daysField(body.days, 30, 730)),

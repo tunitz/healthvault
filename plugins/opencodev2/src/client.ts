@@ -225,6 +225,16 @@ export interface NutritionSummaryInput {
   endDay?: Day;
 }
 
+export interface NutritionTargetSetInput {
+  effectiveFrom?: Day;
+  kcal?: number;
+  proteinG?: number;
+  carbsG?: number;
+  fatG?: number;
+  fibreG?: number;
+  sodiumMg?: number;
+}
+
 export interface NutritionDayTotals extends Macros {
   day: Day;
   entries: number;
@@ -300,6 +310,17 @@ export interface SupplementListResult {
 
 export interface SupplementCreateInput {
   name: string;
+  dose?: number;
+  unit?: string;
+  schedule?: Schedule | null;
+  nutrients?: unknown;
+  notes?: string;
+  active?: boolean;
+}
+
+export interface SupplementUpdateInput {
+  supplementId: number;
+  name?: string;
   dose?: number;
   unit?: string;
   schedule?: Schedule | null;
@@ -434,11 +455,15 @@ export function createClient(options: ServerOptions = {}) {
       server.request<DayNutrition>("nutrition_day", input, signal),
     nutritionSummary: (input: NutritionSummaryInput = {}, signal?: AbortSignal) =>
       server.request<NutritionSummaryResult>("nutrition_summary", input, signal),
+    nutritionTargetSet: (input: NutritionTargetSetInput, signal?: AbortSignal) =>
+      server.request<Targets>("nutrition_target_set", input, signal),
 
     supplementList: (signal?: AbortSignal) =>
       server.request<SupplementListResult>("supplement_list", {}, signal),
     supplementCreate: (input: SupplementCreateInput, signal?: AbortSignal) =>
       server.request<Supplement>("supplement_create", input, signal),
+    supplementUpdate: (input: SupplementUpdateInput, signal?: AbortSignal) =>
+      server.request<Supplement>("supplement_update", input, signal),
     supplementLog: (input: SupplementLogInput, signal?: AbortSignal) =>
       server.request<SupplementLogResult>("supplement_log", input, signal),
 

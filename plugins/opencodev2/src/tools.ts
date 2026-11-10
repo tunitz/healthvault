@@ -17,9 +17,11 @@ import type {
   MetricsSeriesInput,
   NutritionDayInput,
   NutritionSummaryInput,
+  NutritionTargetSetInput,
   ProfileUpdateInput,
   SupplementCreateInput,
   SupplementLogInput,
+  SupplementUpdateInput,
   WorkoutsRecentInput,
 } from "./client";
 
@@ -379,6 +381,26 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
       run: (input, signal) => client.nutritionSummary(input, signal),
     }),
 
+    defineTool<NutritionTargetSetInput>({
+      name: "nutrition_target_set",
+      description:
+        "Create or change an effective-dated nutrition target. Only the fields supplied change; omitted fields inherit the previous target and then the suggestion, so a partial update never zeroes the plan. This changes stored targets. Inputs: effectiveFrom (YYYY-MM-DD, defaults to today in the profile timezone), kcal, proteinG, carbsG, fatG, fibreG, sodiumMg.",
+      input: {
+        type: "object",
+        properties: {
+          effectiveFrom: DAY_SCHEMA,
+          kcal: { type: "number", minimum: 0, maximum: 100000 },
+          proteinG: { type: "number", minimum: 0, maximum: 100000 },
+          carbsG: { type: "number", minimum: 0, maximum: 100000 },
+          fatG: { type: "number", minimum: 0, maximum: 100000 },
+          fibreG: { type: "number", minimum: 0, maximum: 100000 },
+          sodiumMg: { type: "number", minimum: 0, maximum: 100000 },
+        },
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.nutritionTargetSet(input, signal),
+    }),
+
     defineTool<Record<string, never>>({
       name: "supplement_list",
       description:
@@ -417,6 +439,39 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
         additionalProperties: false,
       },
       run: (input, signal) => client.supplementCreate(input, signal),
+    }),
+
+    defineTool<SupplementUpdateInput>({
+      name: "supplement_update",
+      description:
+        "Change an existing supplement regimen; only the fields supplied change. This alters stored regimen data. Inputs: supplementId (required), and any of name, dose, unit, schedule ({ time: HH:MM, days: 0-6[], note } or null), nutrients, notes, active (false archives it).",
+      input: {
+        type: "object",
+        properties: {
+          supplementId: { type: "integer", minimum: 1 },
+          name: { type: "string", maxLength: 160 },
+          dose: { type: "number", minimum: 0.01, maximum: 10000 },
+          unit: { type: "string", maxLength: 40 },
+          schedule: {
+            type: ["object", "null"],
+            properties: {
+              time: { type: ["string", "null"], pattern: "^\\d{2}:\\d{2}$" },
+              days: {
+                type: ["array", "null"],
+                items: { type: "integer", minimum: 0, maximum: 6 },
+              },
+              note: { type: "string" },
+            },
+            additionalProperties: false,
+          },
+          nutrients: {},
+          notes: { type: "string", maxLength: 2000 },
+          active: { type: "boolean" },
+        },
+        required: ["supplementId"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.supplementUpdate(input, signal),
     }),
 
     defineTool<SupplementLogInput>({
@@ -497,8 +552,10 @@ export const TOOL_NAMES = [
   "healthvault_meal_delete",
   "healthvault_nutrition_day",
   "healthvault_nutrition_summary",
+  "healthvault_nutrition_target_set",
   "healthvault_supplement_list",
   "healthvault_supplement_create",
+  "healthvault_supplement_update",
   "healthvault_supplement_log",
   "healthvault_metrics_series",
   "healthvault_workouts_recent",
