@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Dumbbell, LayoutDashboard, MoreHorizontal, Pill, Search, Upload, UserRound, Utensils } from "lucide-react";
+import { Activity, Dumbbell, LayoutDashboard, LogOut, MoreHorizontal, Pill, Search, Upload, UserRound, Utensils } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
@@ -31,7 +31,27 @@ function isActive(pathname: string, href: string) {
 export function AppNav() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const moreActive = MORE.some((item) => isActive(pathname, item.href));
+
+  // The login screen has no app chrome.
+  if (pathname === "/login") return null;
+
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Still clear local state and leave the page even if the request fails.
+    }
+    if (typeof caches !== "undefined") {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    }
+    // Hard navigation intentionally discards the signed-in RSC/client cache.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign("/login");
+  }
 
   return (
     <>
@@ -66,7 +86,19 @@ export function AppNav() {
             })}
           </nav>
 
-          <div className="ms-auto md:ms-0">
+          <div className="ms-auto flex items-center gap-1 md:ms-0">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-11 text-muted-foreground hover:text-foreground md:size-9"
+              onClick={signOut}
+              disabled={signingOut}
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut aria-hidden className="size-4" />
+            </Button>
             <ThemeToggle />
           </div>
         </div>

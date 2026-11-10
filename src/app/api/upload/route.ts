@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { requireSessionOr401 } from "@/lib/auth";
 import { runIngest } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 const MAX_BYTES = 200 * 1024 * 1024;
 
 export async function POST(req: Request) {
+  const denied = await requireSessionOr401();
+  if (denied) return denied;
+
   let form: FormData;
   try {
     form = await req.formData();

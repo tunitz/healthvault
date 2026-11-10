@@ -42,6 +42,7 @@ import {
 import { recentUploads, recordsForType, typeStats, workoutHistory } from "@/db/queries";
 import { currentDay } from "@/lib/services/context";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
+import { requireToken } from "@/lib/auth";
 import { ValidationError, dayField, enumField, fail, numField, readJson, str } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -135,14 +136,24 @@ const TOOLS = {
   },
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = requireToken(request);
+  if (denied) return denied;
+
   return NextResponse.json({
     tools: AGENT_TOOLS,
-    posture: "single-user, local-only; no authentication by design",
+    posture: "single-user; Authorization: Bearer token required on every request",
   });
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ tool: string }> }) {
+  const denied = requireToken(req);
+  if (denied) return denied;
+
+  if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+    return NextResponse.json({ error: "content-type must be application/json" }, { status: 415 });
+  }
+
   const { tool } = await ctx.params;
   const handler = TOOLS[tool as AgentTool];
   if (!handler) {

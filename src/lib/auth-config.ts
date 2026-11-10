@@ -1,0 +1,153 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/** A malformed or missing credential. The message names the exact env var/file to fix. */
+export class AuthConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthConfigError";
+  }
+}
+
+export type PasswordHash = Readonly<{
+  /** scrypt CPU/memory cost. */
+  N: number;
+  r: number;
+  p: number;
+  salt: Buffer;
+  hash: Buffer;
+}>;
+
+export type AuthConfig = Readonly<{
+  passwordHash: PasswordHash;
+  sessionSecret: string;
+  sessionDays: number;
+  cookieSecure: boolean;
+  apiToken: string;
+  /** Where the bearer token came from, for actionable errors. */
+  apiTokenSource: string;
+}>;
+
+const DEFAULT_SESSION_DAYS = 30;
+const HASH_FORMAT = "scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>";
+
+export function expandHomePath(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+export function apiTokenFilePath(): string {
+  const configured = process.env.HEALTHVAULT_API_TOKEN_FILE?.trim();
+  return expandHomePath(configured && configured.length > 0 ? configured : "~/.config/healthvault/token");
+}
+
+function parsePasswordHash(raw: string): PasswordHash {
+  const parts = raw.trim().split(":");
+  if (parts.length !== 6 || parts[0] !== "scrypt") {
+    throw new AuthConfigError(
+      `HEALTHVAULT_PASSWORD_HASH is malformed; expected ${HASH_FORMAT}`,
+    );
+  }
+
+  const [, nRaw, rRaw, pRaw, saltHex, hashHex] = parts;
+  const N = Number(nRaw);
+  const r = Number(rRaw);
+  const p = Number(pRaw);
+  if (
+    !Number.isInteger(N) ||
+    !Number.isInteger(r) ||
+    !Number.isInteger(p) ||
+    N < 2 ||
+    (N & (N - 1)) !== 0 ||
+    r < 1 ||
+    p < 1
+  ) {
+    throw new AuthConfigError(
+      `HEALTHVAULT_PASSWORD_HASH has invalid scrypt parameters; expected ${HASH_FORMAT}`,
+    );
+  }
+
+  if (!/^[0-9a-fA-F]+$/.test(saltHex) || saltHex.length % 2 !== 0) {
+    throw new AuthConfigError("HEALTHVAULT_PASSWORD_HASH salt must be hex-encoded");
+  }
+  if (!/^[0-9a-fA-F]+$/.test(hashHex) || hashHex.length !== 64) {
+    throw new AuthConfigError(
+      "HEALTHVAULT_PASSWORD_HASH hash must be a 32-byte (64-character) hex digest",
+    );
+  }
+
+  return Object.freeze({
+    N,
+    r,
+    p,
+    salt: Buffer.from(saltHex, "hex"),
+    hash: Buffer.from(hashHex, "hex"),
+  });
+}
+
+function readApiToken(): { token: string; source: string } {
+  const fromEnv = process.env.HEALTHVAULT_API_TOKEN?.trim();
+  if (fromEnv) return { token: fromEnv, source: "HEALTHVAULT_API_TOKEN" };
+
+  const path = apiTokenFilePath();
+  try {
+    const token = readFileSync(path, "utf8").trim();
+    if (!token) {
+      throw new Error("file is empty");
+    }
+    return { token, source: path };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new AuthConfigError(
+      `HEALTHVAULT_API_TOKEN is not set and the token file at ${path} cannot be read (${reason}); ` +
+        "set HEALTHVAULT_API_TOKEN or write the token to that file",
+    );
+  }
+}
+
+function loadAuthConfig(): AuthConfig {
+  const rawHash = process.env.HEALTHVAULT_PASSWORD_HASH?.trim();
+  if (!rawHash) {
+    throw new AuthConfigError(
+      `HEALTHVAULT_PASSWORD_HASH is required; expected ${HASH_FORMAT}`,
+    );
+  }
+  const passwordHash = parsePasswordHash(rawHash);
+
+  const sessionSecret = process.env.HEALTHVAULT_SESSION_SECRET ?? "";
+  if (sessionSecret.length < 32) {
+    throw new AuthConfigError(
+      "HEALTHVAULT_SESSION_SECRET is required and must be at least 32 characters",
+    );
+  }
+
+  const daysRaw = process.env.HEALTHVAULT_SESSION_DAYS?.trim();
+  const sessionDays = daysRaw ? Number(daysRaw) : DEFAULT_SESSION_DAYS;
+  if (!Number.isInteger(sessionDays) || sessionDays < 1) {
+    throw new AuthConfigError("HEALTHVAULT_SESSION_DAYS must be a positive integer");
+  }
+
+  const { token, source } = readApiToken();
+
+  return Object.freeze({
+    passwordHash,
+    sessionSecret,
+    sessionDays,
+    cookieSecure: process.env.HEALTHVAULT_COOKIE_SECURE === "1",
+    apiToken: token,
+    apiTokenSource: source,
+  });
+}
+
+let cached: AuthConfig | undefined;
+
+/**
+ * Load and validate every credential. Called once at boot by instrumentation.ts, then reused
+ * per request. Throws AuthConfigError with an actionable message; there is no auth-off mode.
+ */
+export function getAuthConfig(): AuthConfig {
+  if (!cached) cached = loadAuthConfig();
+  return cached;
+}

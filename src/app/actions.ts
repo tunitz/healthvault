@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { DEFAULT_TIMEZONE, isDay, localDay, localTimeMs } from "@/lib/day";
+import { requireSession } from "@/lib/auth";
 import { ValidationError } from "@/lib/validate";
 import { getTimezone, updateProfile } from "@/lib/services/profile";
 import {
@@ -52,6 +53,7 @@ function refresh(...paths: string[]) {
 
 export async function saveProfileAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     updateProfile({
       name: text(fd, "name"),
       birthDate: text(fd, "birthDate"),
@@ -73,6 +75,7 @@ export async function saveProfileAction(_prev: ActionState, fd: FormData): Promi
 
 export async function saveWorkScheduleAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const days: { weekday: number; start: string; end: string }[] = [];
     for (let weekday = 0; weekday < 7; weekday += 1) {
       if (!checked(fd, `enabled-${weekday}`)) continue;
@@ -94,6 +97,7 @@ export async function saveWorkScheduleAction(_prev: ActionState, fd: FormData): 
 
 export async function addMeasurementAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const tz = getTimezone();
     const day = text(fd, "day");
     const time = text(fd, "time");
@@ -117,6 +121,7 @@ export async function addMeasurementAction(_prev: ActionState, fd: FormData): Pr
 
 export async function deleteMeasurementAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     removeMeasurement(text(fd, "id"));
     refresh("/profile", "/");
     return { ok: true };
@@ -142,6 +147,7 @@ function entryMacros(fd: FormData) {
 
 export async function logQuickMealAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     logMeal({
       day: text(fd, "day"),
       meal: text(fd, "meal"),
@@ -163,6 +169,7 @@ export async function logQuickMealAction(_prev: ActionState, fd: FormData): Prom
 
 export async function logFoodAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     logMeal({
       day: text(fd, "day"),
       meal: text(fd, "meal"),
@@ -177,6 +184,7 @@ export async function logFoodAction(_prev: ActionState, fd: FormData): Promise<A
 
 export async function addFoodAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     addFood({
       name: text(fd, "name"),
       brand: text(fd, "brand"),
@@ -192,6 +200,7 @@ export async function addFoodAction(_prev: ActionState, fd: FormData): Promise<A
 
 export async function updateEntryAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const macros = entryMacros(fd);
     const grams = text(fd, "grams");
     // If the macro boxes were left untouched, send only grams so the service scales the
@@ -215,6 +224,7 @@ export async function updateEntryAction(_prev: ActionState, fd: FormData): Promi
 
 export async function deleteEntryAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     deleteEntry(text(fd, "id"));
     refresh("/nutrition", "/");
     return { ok: true };
@@ -225,6 +235,7 @@ export async function deleteEntryAction(_prev: ActionState, fd: FormData): Promi
 
 export async function copyDayAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const result = copyDay(text(fd, "fromDay") ?? "", text(fd, "toDay") ?? "");
     refresh("/nutrition", "/");
     if (result.copied === 0) {
@@ -241,6 +252,7 @@ export async function copyDayAction(_prev: ActionState, fd: FormData): Promise<A
 
 export async function setTargetsAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     setTargets({
       effectiveFrom: text(fd, "effectiveFrom") ?? localDay(Date.now(), getTimezone()),
       kcal: text(fd, "kcal"),
@@ -263,6 +275,7 @@ export async function setTargetsAction(_prev: ActionState, fd: FormData): Promis
 
 export async function toggleSupplementAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     logSupplement({
       supplementId: text(fd, "supplementId"),
       day: text(fd, "day") ?? undefined,
@@ -286,6 +299,7 @@ function scheduleOf(fd: FormData) {
 
 export async function saveSupplementAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const id = text(fd, "id");
     const input = {
       name: text(fd, "name"),
@@ -306,6 +320,7 @@ export async function saveSupplementAction(_prev: ActionState, fd: FormData): Pr
 
 export async function archiveSupplementAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
+    await requireSession();
     const result = deleteSupplement(text(fd, "id"));
     refresh("/supplements", "/");
     return { ok: true, message: result.archived ? "Archived (history kept)" : "Removed" };
