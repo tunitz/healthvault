@@ -16,7 +16,8 @@ export const sqlite = new Database(file);
 // because DATABASE_PATH happened to point inside it.
 try {
   if (dir === defaultDataDir || !dirExisted) chmodSync(dir, 0o700);
-  if (existsSync(file)) chmodSync(file, 0o600);
+  // turbopackIgnore: this is the runtime database path, not a bundled asset.
+  if (existsSync(/* turbopackIgnore: true */ file)) chmodSync(/* turbopackIgnore: true */ file, 0o600);
 } catch {
   // Best effort: a filesystem that cannot chmod (e.g. some containers) must still work.
 }

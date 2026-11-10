@@ -306,6 +306,34 @@ test("agent API rejects invalid numeric parameters with 400, not 500", async () 
   expect(await call("nutrition_day", { day: "nonsense" })).toBe(400);
 });
 
+test("agent API sets nutrition targets and updates a supplement regimen", async () => {
+  const call = async (tool: string, body: unknown) => {
+    const res = await POST(
+      new Request(`http://localhost/api/agent/${tool}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ tool }) },
+    );
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+
+  const target = await call("nutrition_target_set", {
+    effectiveFrom: "2026-11-08", kcal: 1900, proteinG: 120,
+  });
+  expect(target.status).toBe(200);
+  const day = await call("nutrition_day", { day: "2026-11-08" });
+  const nutrition = day.body.result as { targets: { kcal: number; proteinG: number } };
+  expect(nutrition.targets.kcal).toBe(1900);
+  expect(nutrition.targets.proteinG).toBe(120);
+
+  const created = await call("supplement_create", { name: "Zinc", dose: 1, unit: "tablet" });
+  expect(created.status).toBe(200);
+  const id = (created.body.result as { id: number }).id;
+  const updated = await call("supplement_update", { supplementId: id, dose: 2, active: false });
+  expect(updated.status).toBe(200);
+  expect(updated.body.result).toMatchObject({ dose: 2, active: 0 });
+});
+
 test("healthvault_context exposes today, profile, nutrition and freshness", () => {
   const ctx = context.healthvaultContext();
   expect(ctx.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
