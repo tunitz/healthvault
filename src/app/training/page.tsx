@@ -92,7 +92,7 @@ export default function TrainingPage() {
         <Metric
           title="Steps / day (90d)"
           value={compact(stepAvg)}
-          hint={steps[0] ? `source: ${steps[0].source}` : undefined}
+          hint={steps.at(-1) ? `source: ${steps.at(-1)!.source}` : undefined}
         />
         <Metric
           title="Distance (30d)"

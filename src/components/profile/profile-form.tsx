@@ -1,0 +1,125 @@
+"use client";
+
+import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { Input } from "@/components/ui/input";
+import { saveProfileAction, saveWorkScheduleAction } from "@/app/actions";
+import type { Profile } from "@/lib/services/profile";
+
+const SELECT =
+  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+const AREA =
+  "min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+export function ProfileForm({ profile, age }: { profile: Profile; age: number | null }) {
+  return (
+    <ActionForm action={saveProfileAction} className="grid gap-4 sm:grid-cols-2">
+      <Field label="Name">
+        <Input name="name" defaultValue={profile.name ?? ""} autoComplete="name" />
+      </Field>
+
+      <Field label="Date of birth" hint={age === null ? "Used for age-based suggestions" : `${age} years old`}>
+        <Input name="birthDate" type="date" defaultValue={profile.birthDate ?? ""} max={new Date().toISOString().slice(0, 10)} />
+      </Field>
+
+      <Field label="Sex">
+        <select name="sex" defaultValue={profile.sex ?? ""} className={SELECT}>
+          <option value="">Not set</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+          <option value="other">Other</option>
+        </select>
+      </Field>
+
+      <Field label="Height (cm)">
+        <Input name="heightCm" type="number" inputMode="decimal" step="0.1" min="50" max="260" defaultValue={profile.heightCm ?? ""} />
+      </Field>
+
+      <Field label="Timezone" hint="IANA name, e.g. Asia/Shanghai">
+        <Input name="timezone" defaultValue={profile.timezone} autoComplete="off" spellCheck={false} />
+      </Field>
+
+      <Field label="Units">
+        <select name="units" defaultValue={profile.units} className={SELECT}>
+          <option value="metric">Metric (kg, cm)</option>
+          <option value="imperial">Imperial (lb, in)</option>
+        </select>
+      </Field>
+
+      <Field label="Goal weight (kg)">
+        <Input name="goalWeightKg" type="number" inputMode="decimal" step="0.1" min="20" max="400" defaultValue={profile.goalWeightKg ?? ""} />
+      </Field>
+
+      <div className="sm:col-span-2 grid gap-4">
+        <details className="rounded-xl border border-border" open={Boolean(profile.goalsNote || profile.dietNote || profile.activityNote)}>
+          <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Notes</summary>
+          <div className="grid gap-3 border-t border-border p-4 sm:grid-cols-3">
+            <Field label="Goals">
+              <textarea name="goalsNote" className={AREA} defaultValue={profile.goalsNote ?? ""} />
+            </Field>
+            <Field label="Diet">
+              <textarea name="dietNote" className={AREA} defaultValue={profile.dietNote ?? ""} />
+            </Field>
+            <Field label="Activity">
+              <textarea name="activityNote" className={AREA} defaultValue={profile.activityNote ?? ""} />
+            </Field>
+          </div>
+        </details>
+      </div>
+
+      <div className="sm:col-span-2 flex justify-end">
+        <SubmitButton>Save profile</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+export function WorkScheduleForm({
+  schedule,
+}: {
+  schedule: { days: { weekday: number; start: string; end: string }[]; note?: string };
+}) {
+  const byDay = new Map(schedule.days.map((day) => [day.weekday, day]));
+  return (
+    <ActionForm action={saveWorkScheduleAction} className="flex flex-col gap-3">
+      <div className="flex flex-col divide-y divide-border">
+        {WEEKDAYS.map((label, weekday) => {
+          const entry = byDay.get(weekday);
+          return (
+            <div key={weekday} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 py-2">
+              <input
+                type="checkbox"
+                name={`enabled-${weekday}`}
+                defaultChecked={Boolean(entry)}
+                aria-label={label}
+                className="size-4 accent-[var(--primary)]"
+              />
+              <span className="text-sm">{label}</span>
+              <Input
+                type="time"
+                name={`start-${weekday}`}
+                defaultValue={entry?.start ?? "09:00"}
+                aria-label={`${label} start`}
+                className="w-28"
+              />
+              <Input
+                type="time"
+                name={`end-${weekday}`}
+                defaultValue={entry?.end ?? "17:00"}
+                aria-label={`${label} end`}
+                className="w-28"
+              />
+            </div>
+          );
+        })}
+      </div>
+      <Field label="Schedule note">
+        <Input name="scheduleNote" defaultValue={schedule.note ?? ""} placeholder="Optional" />
+      </Field>
+      <div className="flex justify-end">
+        <SubmitButton>Save schedule</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}

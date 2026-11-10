@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "/home/tunitz/projects/healthvault/plugins/opencodev2",
+      "options": {
+        "baseUrl": "http://127.0.0.1:3040"
+      }
+    }
+  ]
+}

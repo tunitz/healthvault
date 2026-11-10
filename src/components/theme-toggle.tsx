@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,14 @@ const META: Record<Mode, { label: string; Icon: typeof Sun }> = {
   dark: { label: "Dark", Icon: Moon },
 };
 
+// False during SSR/first paint, true once hydrated — without a setState-in-effect.
+const subscribeNoop = () => () => {};
+const clientTrue = () => true;
+const serverFalse = () => false;
+
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  // Avoid hydration mismatch: theme is only known on the client.
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(subscribeNoop, clientTrue, serverFalse);
 
   if (!mounted) {
     return <span aria-hidden className="inline-block size-11 md:size-9" />;

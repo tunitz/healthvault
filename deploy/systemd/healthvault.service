@@ -1,0 +1,26 @@
+[Unit]
+Description=HealthVault
+Documentation=file:///home/tunitz/projects/healthvault/README.md
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/tunitz/projects/healthvault
+# bun is not on PATH in non-interactive shells; the app runs under bun because the
+# system Node (v20.19.2) segfaults loading the better-sqlite3 prebuild on this host.
+Environment=PATH=/home/tunitz/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=PORT=3040
+Environment=HOSTNAME=0.0.0.0
+Environment=DATABASE_PATH=/home/tunitz/projects/healthvault/data/health.db
+ExecStart=/home/tunitz/.bun/bin/bun --bun node_modules/next/dist/bin/next start -H 0.0.0.0 -p 3040
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+# bun's Next server exits 143 on SIGTERM; treat an explicit stop as clean.
+SuccessExitStatus=143
+
+[Install]
+WantedBy=default.target

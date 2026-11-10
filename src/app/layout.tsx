@@ -12,6 +12,8 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 export const metadata: Metadata = {
   title: "Health Vault",
   description: "Apple Health export explorer",
+  // Personal health data on a LAN-bound single-user app: never index it.
+  robots: { index: false, follow: false },
   appleWebApp: { capable: true, title: "Health Vault", statusBarStyle: "default" },
 };
 

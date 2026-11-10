@@ -1,4 +1,13 @@
+import { addDays, localDay } from "@/lib/day";
+import { getTimezone } from "@/lib/services/profile";
 import { sqlite } from "@/db";
+
+/** The local day `days - 1` before today, so a "last N days" window is exactly N days
+ * inclusive of today (the old `-days` bound made every window one day too long). */
+function windowStart(days: number): string {
+  const n = Number.isFinite(days) && days >= 1 ? Math.trunc(days) : 1;
+  return addDays(localDay(Date.now(), getTimezone()), -(n - 1));
+}
 
 export type TypeStat = {
   typeIdentifier: string; unit: string; count: number;
@@ -13,19 +22,8 @@ export function typeStats(): TypeStat[] {
     FROM records GROUP BY type_identifier ORDER BY count DESC`).all() as TypeStat[];
 }
 
-export function dailyTotals(typeIdentifier: string, limit = 365) {
-  return (sqlite.prepare(`
-    SELECT day, SUM(value) AS total FROM records
-    WHERE type_identifier = ? GROUP BY day ORDER BY day DESC LIMIT ?`)
-    .all(typeIdentifier, limit) as { day: string; total: number }[]).reverse();
-}
-
-export function dailyAverages(typeIdentifier: string, limit = 365) {
-  return (sqlite.prepare(`
-    SELECT day, AVG(value) AS avg, COUNT(*) AS n FROM records
-    WHERE type_identifier = ? GROUP BY day ORDER BY day DESC LIMIT ?`)
-    .all(typeIdentifier, limit) as { day: string; avg: number; n: number }[]).reverse();
-}
+/* `dailyTotals`/`dailyAverages` were removed: summing a quantity across devices double counts
+ * phone+watch days. Use `stepsDaily`/`dailySeriesSingleSource` for anything a person reads. */
 
 /** A sleep segment belongs to the night that started the previous evening: segments after
  * midnight are attributed back to their start day (Apple writes a night as several records).
@@ -34,13 +32,29 @@ export function dailyAverages(typeIdentifier: string, limit = 365) {
 const NIGHT = `CASE WHEN CAST(substr(start_date, 12, 2) AS INTEGER) < 12 THEN date(day, '-1 day') ELSE day END`;
 const ASLEEP = "(value IN (2, 4, 5, 6))"; // Asleep*, Core, Deep, REM — InBed(1)/Awake(3) excluded
 
-export function sleepByDayStage(limit = 90) {
+/** Newest `nights` nights, each with one row per stage. The LIMIT is on nights, not on
+ * (night, stage) rows — the old query showed ~25 nights when 90 were asked for.
+ *
+ * The computed column is deliberately called `night`, not `day`: when an alias collides with
+ * a real column, SQLite resolves GROUP BY/ORDER BY to the column, which split every
+ * midnight-crossing night by calendar day. */
+export function sleepByDayStage(nights = 90) {
+  const capped = Number.isFinite(nights) && nights >= 1 ? Math.trunc(nights) : 90;
   return (sqlite.prepare(`
-    SELECT ${NIGHT} AS day, value AS stage, SUM((end_ms - start_ms) / 3600000.0) AS hours
-    FROM records
-    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
-    GROUP BY ${NIGHT}, value ORDER BY day DESC LIMIT ?`)
-    .all(limit) as { day: string; stage: number; hours: number }[]).reverse();
+    WITH recent AS (
+      SELECT ${NIGHT} AS night FROM records
+      WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
+      GROUP BY night ORDER BY night DESC LIMIT ?
+    ), staged AS (
+      SELECT ${NIGHT} AS night, value AS stage, SUM((end_ms - start_ms) / 3600000.0) AS hours
+      FROM records
+      WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
+      GROUP BY night, value
+    )
+    SELECT staged.night AS day, staged.stage, staged.hours
+    FROM staged JOIN recent ON recent.night = staged.night
+    ORDER BY staged.night`)
+    .all(capped) as { day: string; stage: number; hours: number }[]);
 }
 
 export function activitySummarySeries(limit = 180) {
@@ -52,6 +66,14 @@ export function activitySummarySeries(limit = 180) {
       day: string; activeEnergy: number | null; activeEnergyGoal: number | null;
       moveMinutes: number | null; exerciseTime: number | null; standHours: number | null;
     }[]).reverse();
+}
+
+/** Any real Move-minute value at all. The metric is null in 776 of 777 real summaries, so the
+ * dashboard must not render a permanent 0 for it. */
+export function hasMoveMinutes(): boolean {
+  return Boolean(
+    sqlite.prepare("SELECT 1 AS x FROM activity_summaries WHERE apple_move_minutes IS NOT NULL LIMIT 1").get(),
+  );
 }
 
 export function allWorkouts(limit = 500) {
@@ -100,16 +122,27 @@ export function counts() {
 }
 
 export function stepsSummary(days = 30) {
-  const row = sqlite.prepare(`
-    SELECT COUNT(DISTINCT day) AS days, SUM(value) AS total, AVG(value) AS perRecord
-    FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount'
-      AND day >= date('now', ?)`).get(`-${days} days`) as { days: number; total: number | null; perRecord: number | null };
-  const daily = dailyTotals("HKQuantityTypeIdentifierStepCount", days);
+  // `stepsDaily` already picks one source per day; summing `records.value` here was the
+  // +42.7% inflation the audit found.
+  const daily = stepsDaily(days);
+  const total = daily.reduce((a, d) => a + d.value, 0);
   const allTime = sqlite.prepare(`
-    SELECT SUM(value) AS total FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount'`)
-    .get() as { total: number | null };
-  const avgPerDay = daily.length ? daily.reduce((a, d) => a + d.total, 0) / daily.length : 0;
-  return { windowDays: days, days: row.days, totalInWindow: row.total ?? 0, avgPerDay, allTimeSteps: allTime.total ?? 0 };
+    WITH perSource AS (
+      SELECT day, source_name AS source, SUM(value) AS total, COUNT(*) AS samples
+      FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount'
+      GROUP BY day, source_name
+    ), ranked AS (
+      SELECT day, total, ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, total DESC) AS rk
+      FROM perSource
+    )
+    SELECT SUM(total) AS total FROM ranked WHERE rk = 1`).get() as { total: number | null };
+  return {
+    windowDays: days,
+    days: daily.length,
+    totalInWindow: total,
+    avgPerDay: daily.length ? total / daily.length : 0,
+    allTimeSteps: allTime.total ?? 0,
+  };
 }
 
 export function sleepSummary(days = 30) {
@@ -117,7 +150,7 @@ export function sleepSummary(days = 30) {
     SELECT SUM((end_ms - start_ms) / 3600000.0) AS hours, COUNT(DISTINCT ${NIGHT}) AS nights
     FROM records
     WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND ${ASLEEP}
-      AND ${NIGHT} >= date('now', ?)`).get(`-${days} days`) as { hours: number | null; nights: number };
+      AND ${NIGHT} >= ?`).get(windowStart(days)) as { hours: number | null; nights: number };
   const hours = row.hours ?? 0;
   return { windowDays: days, nights: row.nights, totalHours: hours, avgPerNight: row.nights ? hours / row.nights : 0 };
 }
@@ -126,7 +159,7 @@ export function activitySummaryTotals(days = 30) {
   const row = sqlite.prepare(`
     SELECT SUM(active_energy_burned) AS energy, SUM(apple_exercise_time) AS exercise,
            SUM(apple_move_minutes) AS move, COUNT(*) AS days
-    FROM activity_summaries WHERE day >= date('now', ?)`).get(`-${days} days`) as {
+    FROM activity_summaries WHERE day >= ?`).get(windowStart(days)) as {
       energy: number | null; exercise: number | null; move: number | null; days: number };
   return { windowDays: days, energy: row.energy ?? 0, exerciseMinutes: row.exercise ?? 0, moveMinutes: row.move ?? 0, days: row.days };
 }
@@ -147,14 +180,14 @@ export function dailySeriesSingleSource(typeIdentifier: string, days = 90, agg: 
   return sqlite.prepare(`
     WITH perSource AS (
       SELECT day, source_name AS source, ${fn} AS value, COUNT(*) AS samples
-      FROM records WHERE type_identifier = ? AND day >= date('now', ?)
+      FROM records WHERE type_identifier = ? AND day >= ?
       GROUP BY day, source_name
     ), ranked AS (
       SELECT day, source, value,
              ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, value DESC) AS rk
       FROM perSource
     )
-    SELECT day, source, value FROM ranked WHERE rk = 1 ORDER BY day`).all(typeIdentifier, `-${days} days`) as DailyPoint[];
+    SELECT day, source, value FROM ranked WHERE rk = 1 ORDER BY day`).all(typeIdentifier, windowStart(days)) as DailyPoint[];
 }
 
 export function stepsDaily(days = 90) {
@@ -210,8 +243,8 @@ export function workoutTrend(days = 180) {
            CASE WHEN total_distance > 0 AND duration_seconds > 0
                 THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm
     FROM workouts
-    WHERE day >= date('now', ?) AND workout_activity_type LIKE '%Running%'
-    ORDER BY start_ms`).all(`-${days} days`) as {
+    WHERE day >= ? AND workout_activity_type LIKE '%Running%'
+    ORDER BY start_ms`).all(windowStart(days)) as {
       day: string; km: number | null; minutes: number; avgHr: number | null;
       maxHr: number | null; paceMinPerKm: number | null;
     }[];
@@ -227,8 +260,8 @@ export function weeklyTraining(weeks = 26) {
            SUM(total_distance) AS km,
            AVG(avg_hr) AS avgHr
     FROM workouts
-    WHERE day >= date('now', ?)
-    GROUP BY weekStart ORDER BY weekStart`).all(`-${weeks * 7} days`) as {
+    WHERE day >= ?
+    GROUP BY weekStart ORDER BY weekStart`).all(windowStart(weeks * 7)) as {
       weekStart: string; weekEnd: string; sessions: number; minutes: number | null;
       km: number | null; avgHr: number | null;
     }[];
@@ -238,30 +271,44 @@ export function workoutTotals(days = 30) {
   const row = sqlite.prepare(`
     SELECT COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes, SUM(total_distance) AS km,
            SUM(total_energy_burned) AS kcal, AVG(avg_hr) AS avgHr, MAX(max_hr) AS maxHr
-    FROM workouts WHERE day >= date('now', ?)`).get(`-${days} days`) as {
+    FROM workouts WHERE day >= ?`).get(windowStart(days)) as {
       sessions: number; minutes: number | null; km: number | null; kcal: number | null;
       avgHr: number | null; maxHr: number | null };
   return { windowDays: days, ...row };
+}
+
+/** Honest totals for the whole table, used by /workouts (which previously summed only the
+ * 500 newest rows). */
+export function workoutTotalsAll() {
+  const row = sqlite.prepare(`
+    SELECT COUNT(*) AS sessions, SUM(duration_seconds) AS seconds, SUM(total_distance) AS km,
+           SUM(total_energy_burned) AS kcal
+    FROM workouts`).get() as { sessions: number; seconds: number | null; km: number | null; kcal: number | null };
+  return { sessions: row.sessions, seconds: row.seconds ?? 0, km: row.km ?? 0, kcal: row.kcal ?? 0 };
 }
 
 export function workoutTypeBreakdown(days = 180) {
   return sqlite.prepare(`
     SELECT workout_activity_type AS type, COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes,
            SUM(total_distance) AS km
-    FROM workouts WHERE day >= date('now', ?)
-    GROUP BY type ORDER BY sessions DESC`).all(`-${days} days`) as {
+    FROM workouts WHERE day >= ?
+    GROUP BY type ORDER BY sessions DESC`).all(windowStart(days)) as {
       type: string; sessions: number; minutes: number | null; km: number | null }[];
 }
 
 /** Change between the last 30 days and the 30 before it — direction of travel, not a snapshot. */
 export function trendDelta(days = 30) {
-  const half = (offset: number) =>
-    sqlite.prepare(`
+  const end = localDay(Date.now(), getTimezone());
+  const half = (offset: number) => {
+    const stop = addDays(end, -offset);
+    const start = addDays(stop, -(days - 1));
+    return sqlite.prepare(`
       SELECT COUNT(*) AS sessions, SUM(total_distance) AS km, AVG(avg_hr) AS avgHr,
              SUM(duration_seconds) / 60.0 AS minutes
-      FROM workouts WHERE day >= date('now', ?) AND day < date('now', ?)`)
-      .get(`-${offset + days} days`, `-${offset} days`) as {
+      FROM workouts WHERE day >= ? AND day <= ?`)
+      .get(start, stop) as {
         sessions: number; km: number | null; avgHr: number | null; minutes: number | null };
+  };
   const now = half(0);
   const before = half(days);
   const pct = (a: number | null, b: number | null) =>

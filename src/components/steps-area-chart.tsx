@@ -13,7 +13,7 @@ export function StepsAreaChart({ data }: { data: { day: string; total: number }[
     <section className="flex flex-col gap-3">
       <div className="flex flex-col gap-0.5">
         <h2 className="text-sm font-medium">Steps per day</h2>
-        <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">Sum of every step-count record, grouped by export-local day</p>
+        <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">One source per day — phone and watch are never summed together</p>
       </div>
       {data.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">No data in this range</p>

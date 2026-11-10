@@ -4,6 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { UploadForm } from "@/components/upload-form";
 import { recentUploads } from "@/db/queries";
 import { bytes, instant, num } from "@/lib/format";
+import { getTimezone } from "@/lib/services/profile";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,7 @@ const statusVariant = (status: string) =>
 
 export default function UploadsPage() {
   const uploads = recentUploads();
+  const timezone = getTimezone();
   const last = uploads[0];
 
   return (
@@ -45,7 +47,7 @@ export default function UploadsPage() {
           <h2 className="text-sm font-medium">Import an export</h2>
           <p className="text-xs text-muted-foreground">
             {last && last.status === "done"
-              ? `Last import: ${num(last.recordsInserted)} rows on ${instant(last.createdAtMs)}.`
+              ? `Last import: ${num(last.recordsInserted)} rows on ${instant(last.createdAtMs, timezone)}.`
               : "No successful import yet."}
           </p>
         </div>
@@ -81,7 +83,7 @@ export default function UploadsPage() {
             <TableBody>
               {uploads.map((u, i) => (
                 <TableRow key={`${u.createdAtMs}-${i}`}>
-                  <TableCell className="num text-muted-foreground">{instant(u.createdAtMs)}</TableCell>
+                  <TableCell className="num text-muted-foreground">{instant(u.createdAtMs, timezone)}</TableCell>
                   <TableCell className="max-w-[220px] truncate">{u.filename}</TableCell>
                   <TableCell className="num text-right">{bytes(u.bytes)}</TableCell>
                   <TableCell>

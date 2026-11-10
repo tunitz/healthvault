@@ -32,7 +32,19 @@ afterAll(() => {
  * every file starts from empty tables instead of whatever the previous file left behind. */
 export async function resetDatabase(): Promise<void> {
   const { sqlite } = await import("@/db");
-  for (const table of ["records", "workouts", "activity_summaries", "uploads"]) {
+  for (const table of [
+    "food_log",
+    "foods",
+    "nutrition_targets",
+    "measurements",
+    "supplement_logs",
+    "supplements",
+    "profile",
+    "records",
+    "workouts",
+    "activity_summaries",
+    "uploads",
+  ]) {
     sqlite.exec(`DELETE FROM ${table}`);
   }
 }

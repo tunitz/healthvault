@@ -1,3 +1,5 @@
+import { DEFAULT_TIMEZONE, formatLocal } from "@/lib/day";
+
 /** Numbers are shown with at most 2 decimals: no 7.866600000000001 in a tooltip, and no
  * forced trailing zeros on whole numbers. `digits` caps the decimals (0 for counts). */
 export function num(n: number | null | undefined, digits = 2): string {
@@ -18,9 +20,11 @@ export function bytes(n: number): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-export function instant(ms: number | null): string {
+/** Local wall-clock time in the profile's zone (the old version rendered UTC with a
+ * misleading " UTC" suffix, so a 19:39 import showed as 11:39). */
+export function instant(ms: number | null, tz: string = DEFAULT_TIMEZONE): string {
   if (!ms) return "—";
-  return new Date(ms).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  return formatLocal(ms, tz);
 }
 
 export function minutes(seconds: number | null): string {

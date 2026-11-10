@@ -25,26 +25,28 @@ function Metric({ title, value, unit }: { title: string; value: string; unit?: s
 
 export function ExplorerClient({ types }: { types: TypeStat[] }) {
   const [selected, setSelected] = useState(types[0]?.typeIdentifier ?? "");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Loading is derived: the rows on screen belong to `result.type`, so a different selection
+  // is "loading" without a synchronous setState inside the effect.
+  const [result, setResult] = useState<{ type: string; rows: Row[] } | null>(null);
 
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
-    setLoading(true);
     fetch(`/api/type-stats?type=${encodeURIComponent(selected)}`)
       .then((r) => r.json())
       .then((body: { rows: Row[] }) => {
-        if (!cancelled) setRows(body.rows);
+        if (!cancelled) setResult({ type: selected, rows: body.rows });
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch(() => {
+        if (!cancelled) setResult({ type: selected, rows: [] });
       });
     return () => {
       cancelled = true;
     };
   }, [selected]);
 
+  const loading = Boolean(selected) && result?.type !== selected;
+  const rows = result?.rows ?? [];
   const stats = types.find((t) => t.typeIdentifier === selected);
 
   return (

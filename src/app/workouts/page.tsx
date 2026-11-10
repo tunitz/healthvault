@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { allWorkouts } from "@/db/queries";
+import { allWorkouts, workoutTotalsAll } from "@/db/queries";
 import { hrZone, minutes, num, plural, workoutLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -23,19 +23,16 @@ function Metric({ title, value }: { title: string; value: string }) {
 
 export default function WorkoutsPage() {
   const workouts = allWorkouts();
-  const totalSeconds = workouts.reduce((a, w) => a + (w.durationSeconds ?? 0), 0);
-  const totalDistance = workouts
-    .filter((w) => w.totalDistanceUnit === "km")
-    .reduce((a, w) => a + (w.totalDistance ?? 0), 0);
-  const totalEnergy = workouts
-    .filter((w) => w.totalEnergyBurnedUnit === "kcal")
-    .reduce((a, w) => a + (w.totalEnergyBurned ?? 0), 0);
+  const totals = workoutTotalsAll();
 
   return (
     <div className="flex flex-col gap-10">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Workouts</h1>
-        <p className="text-sm text-muted-foreground">{plural(workouts.length, "workout")} in the database</p>
+        <p className="text-sm text-muted-foreground">
+          {plural(totals.sessions, "workout")} in the database
+          {workouts.length < totals.sessions ? ` · showing the newest ${workouts.length}` : ""}
+        </p>
       </div>
 
       {workouts.length === 0 ? (
@@ -45,15 +42,17 @@ export default function WorkoutsPage() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-3">
-            <Metric title="Total time" value={minutes(totalSeconds)} />
-            <Metric title="Distance (km workouts)" value={`${num(totalDistance, 2)} km`} />
-            <Metric title="Energy (kcal workouts)" value={`${num(totalEnergy)} kcal`} />
+            <Metric title="Total time" value={minutes(totals.seconds)} />
+            <Metric title="Total distance" value={`${num(totals.km, 2)} km`} />
+            <Metric title="Total energy" value={`${num(totals.kcal)} kcal`} />
           </div>
 
           <section className="flex flex-col gap-3">
             <div className="flex flex-col gap-0.5">
               <h2 className="text-sm font-medium">All workouts</h2>
-              <p className="text-xs text-muted-foreground">Newest first, capped at 500 rows</p>
+              <p className="text-xs text-muted-foreground">
+                Showing {num(workouts.length, 0)} of {plural(totals.sessions, "row")}, newest first
+              </p>
             </div>
             <Table>
               <TableHeader>

@@ -1,6 +1,6 @@
 // Health Vault service worker: read-only offline cache.
 // Bump VERSION whenever cache layout or caching rules change.
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `healthvault-${VERSION}`;
 const NETWORK_TIMEOUT_MS = 4000;
 const OFFLINE_HTML = `<!doctype html>
@@ -72,7 +72,7 @@ async function networkFirst(request, isNavigation) {
   try {
     const fresh = await Promise.race([network, timeout]);
     if (fresh) return fresh;
-  } catch (_) {
+  } catch {
     // network error: fall through to cache
   } finally {
     clearTimeout(timer);
@@ -93,7 +93,7 @@ async function networkFirst(request, isNavigation) {
   // Non-navigation with nothing cached: let the original failure surface.
   try {
     return await network;
-  } catch (_) {
+  } catch {
     return Response.error();
   }
 }
@@ -104,7 +104,9 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/upload")) return;
+  // API responses are live data: caching them made the Explorer show yesterday's numbers
+  // (and /api/type-stats is a ~1M-row scan, so it must not be replayed from a stale cache).
+  if (url.pathname.startsWith("/api/")) return;
 
   if (isStaticAsset(url)) {
     event.respondWith(cacheFirst(request));

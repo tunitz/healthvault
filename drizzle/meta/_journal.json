@@ -15,6 +15,13 @@
       "when": 1789307560967,
       "tag": "0001_demonic_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794284659764,
+      "tag": "0002_cooing_iron_fist",
+      "breakpoints": true
     }
   ]
 }

@@ -20,7 +20,17 @@ export type SummaryRow = {
   appleExerciseTime?: number; appleExerciseTimeGoal?: number;
   appleStandHours?: number; appleStandHoursGoal?: number;
 };
-export type ParsedHealth = { records: HealthRecordRow[]; workouts: WorkoutRow[]; summaries: SummaryRow[] };
+export type MeCharacteristics = {
+  dateOfBirth?: string;
+  biologicalSex?: string;
+};
+
+export type ParsedHealth = {
+  records: HealthRecordRow[];
+  workouts: WorkoutRow[];
+  summaries: SummaryRow[];
+  me: MeCharacteristics;
+};
 
 /** "2026-09-01 07:30:00 +0800" -> epoch ms. Apple writes a space before the offset, which Date rejects verbatim. */
 export function msOf(s: string): number {
@@ -75,7 +85,7 @@ type WorkoutStat = { sum?: string; average?: string; minimum?: string; maximum?:
  * MB of XML, so the caller streams it) and drain rows out as they are produced.
  */
 export function createHealthParser() {
-  const rows: ParsedHealth = { records: [], workouts: [], summaries: [] };
+  const rows: ParsedHealth = { records: [], workouts: [], summaries: [], me: {} };
 
   const p = sax.parser(true); // strict: real exports are well-formed XML
   let rec: sax.Tag | null = null;
@@ -86,6 +96,16 @@ export function createHealthParser() {
 
   p.onopentag = (t: sax.Tag) => {
     if (t.name === "Correlation") { inCorrelation = true; return; }
+    if (t.name === "Me") {
+      // <Me HKCharacteristicTypeIdentifierDateOfBirth="…" …/> — Apple's only source of
+      // birth date and biological sex; ignoring it is why profile fields started empty.
+      const a = t.attributes;
+      const dob = String(a.HKCharacteristicTypeIdentifierDateOfBirth ?? "");
+      const sex = String(a.HKCharacteristicTypeIdentifierBiologicalSex ?? "");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dob)) rows.me.dateOfBirth = dob;
+      if (sex) rows.me.biologicalSex = sex.replace(/^HKBiologicalSex/, "").toLowerCase();
+      return;
+    }
     if (workout) {
       // distance / energy / heart rate for a workout live here, not on the <Workout> element
       if (t.name === "WorkoutStatistics") {
@@ -187,7 +207,10 @@ export function createHealthParser() {
       records: rows.records.splice(0, rows.records.length),
       workouts: rows.workouts.splice(0, rows.workouts.length),
       summaries: rows.summaries.splice(0, rows.summaries.length),
+      me: { ...rows.me },
     }),
+    /** <Me> is one element near the top; it is kept for the whole parse. */
+    characteristics: (): MeCharacteristics => ({ ...rows.me }),
   };
 }
 

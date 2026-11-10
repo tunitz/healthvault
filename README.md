@@ -6,6 +6,42 @@ browsed in a Next.js dashboard (shadcn components + recharts).
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
 **shadcn** (radix + nova preset). No auth, no cloud, one local database file.
 
+## What it tracks
+
+| Area | Route | Storage |
+|---|---|---|
+| Apple Health import (records, workouts, activity days) | `/`, `/training`, `/workouts`, `/explorer`, `/uploads` | `records`, `workouts`, `activity_summaries`, `uploads` |
+| Personal profile (name, birth date, sex, height, timezone, units, work schedule, goals, notes) | `/profile` | `profile` (singleton) |
+| Weight / body-fat / waist | `/profile` | `measurements` (manual) merged with Apple `BodyMass` |
+| Food, calories and macros | `/nutrition` | `foods`, `food_log`, `nutrition_targets` |
+| Supplements | `/supplements` | `supplements`, `supplement_logs` |
+
+Apple's `<Me>` element (birth date, biological sex) is captured during import and prefills only
+empty profile fields; it never overwrites an edited value. Height is prefilled from the newest
+`HKQuantityTypeIdentifierHeight` record. Body weight is **not** silently written: manual entries
+and Apple `BodyMass` are merged for display, each point labelled with its source.
+
+Every "today"/"last N days" boundary uses the profile's IANA timezone (`Asia/Shanghai` by default),
+not SQLite's UTC `date('now')` — the two disagree by 8 hours here, which used to hide the current
+day's rows from rolling windows. Timestamps in the UI are local wall-clock, not UTC.
+
+## Agent API
+
+`POST /api/agent/<tool>` takes a JSON object and returns `{ ok: true, tool, result }`, or
+`{ ok: false, tool, error }` with 400/404/409/500. `GET /api/agent` lists the tools. It is bound to
+the same LAN-facing server as the UI and deliberately has **no authentication** (single-user,
+local-only posture); do not expose port 3040 to the internet.
+
+Tools: `healthvault_context`, `profile_get`, `profile_update`, `measurement_add`,
+`measurement_history`, `food_search`, `food_add`, `meal_log`, `meal_update`, `meal_delete`,
+`nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_create`, `supplement_log`,
+`metrics_series`, `workouts_recent`.
+
+`healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
+the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data
+freshness (last import, last record day). The OpenCode plugin lives in `plugins/opencodev2/` and is
+registered in `.opencode/opencode.jsonc`; it calls `http://127.0.0.1:3040`.
+
 ## Upgrading from an earlier import
 
 Workout parsing was corrected: distance/energy/heart-rate now come from the `<WorkoutStatistics>`
@@ -53,7 +89,8 @@ Three optimizations were measured and **rejected** for giving nothing: forcing `
 hand-rolled date fast-path (29.3 s → 28.8 s). Do not re-add them without a measurement.
 
 Tuning knobs (defaults are fine): `INGEST_CHUNK` (rows per INSERT, 1000), `INGEST_SLICE` (zip bytes pushed
-into the inflater per step, 1 MiB).
+into the inflater per step, 1 MiB), `INGEST_MAX_XML` (uncompressed `export.xml` cap, 1536 MiB — a
+real 4-year export inflates to ~410 MB; the cap stops a crafted zip from decompressing without bound).
 
 ## Auth / transport
 
@@ -79,6 +116,29 @@ bun run dev                          # http://localhost:3000
 (git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. Migrations run on every
 boot inside `src/db/index.ts` (`migrate()` from the drizzle better-sqlite3 migrator) — a fresh file
 is brought up to schema automatically, which is also how the tests get their tables.
+
+The database file is created **mode 600** and its directory **mode 700** (health data is private).
+
+## Back up / restore
+
+`bun run db:backup` uses SQLite's online backup API, so it is WAL-safe while the app is running:
+
+```bash
+bun run db:backup                                  # data/backups/health-<timestamp>.db
+bun run db:backup /path/to/health-2026-11-10.db    # explicit destination
+```
+
+It runs `PRAGMA integrity_check` first, writes the copy mode 600, and prints the size. Restore by
+stopping the service, replacing `data/health.db` (and deleting any `-wal`/`-shm` sidecars), then
+starting it again.
+
+## Security posture
+
+The service listens on `0.0.0.0:3040` so the phone/PWA can reach it, and has no login by design.
+That means any device on the LAN can read and write health data. Keep it on a trusted network; do
+not port-forward it. Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff` and a `Referrer-Policy: no-referrer`; the service worker never
+caches `/api/*`.
 
 ## Ingest design (why it streams)
 
@@ -111,13 +171,22 @@ Parsing rules worth knowing:
 ## Layout
 
 ```
-src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summaries
-src/db/index.ts      sqlite connection + migrate-on-boot      src/db/queries.ts  aggregate SQL
-src/lib/xml.ts       incremental Apple Health XML parser      src/lib/ingest.ts  streaming ingest
-src/app/             dashboard (/), explorer, workouts, uploads + api/upload, api/type-stats
-src/components/      steps/sleep/activity charts, explorer client, upload form, ui/* (shadcn)
-src/test/            fixture XML + parser/ingest/route tests (bun test)
+src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summaries,
+                     profile, measurements, nutrition_targets, foods, food_log,
+                     supplements, supplement_logs
+src/db/index.ts      sqlite connection + migrate-on-boot + private file modes
+src/db/queries.ts    aggregate SQL (single-source-per-day, local-day windows)
+src/lib/day.ts       timezone helpers: local day, windows, formatting
+src/lib/xml.ts       incremental Apple Health XML parser (+ <Me>)
+src/lib/ingest.ts    streaming ingest + profile prefill
+src/lib/services/    profile, measurements, nutrition, supplements, context
+src/app/             dashboard (/), training, workouts, explorer, uploads,
+                     profile, nutrition, supplements + api/upload, api/type-stats, api/agent
+src/components/      charts, explorer client, upload form, app nav, ui/* (shadcn)
+src/test/            fixture XML + parser/ingest/route/service tests (bun test)
 scripts/seed-fixture.ts   load the test fixture into the database
+scripts/backup-db.ts      WAL-safe online backup
+plugins/opencodev2/       OpenCode plugin exposing the agent API as tools
 ```
 
 ## Troubleshooting

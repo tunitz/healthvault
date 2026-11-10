@@ -1,8 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
-const PREFETCH_ROUTES = ["/", "/training", "/workouts", "/explorer", "/uploads"];
+const PREFETCH_ROUTES = ["/", "/training", "/nutrition", "/supplements", "/profile", "/workouts", "/explorer", "/uploads"];
+
+function subscribeOnline(callback: () => void) {
+  window.addEventListener("online", callback);
+  window.addEventListener("offline", callback);
+  return () => {
+    window.removeEventListener("online", callback);
+    window.removeEventListener("offline", callback);
+  };
+}
+
+/** navigator.onLine as an external store: no setState inside an effect, no hydration flash. */
+function useOnline(): boolean {
+  return useSyncExternalStore(
+    subscribeOnline,
+    () => navigator.onLine,
+    () => true,
+  );
+}
 
 function prefetchRoutes() {
   for (const route of PREFETCH_ROUTES) {
@@ -12,15 +30,9 @@ function prefetchRoutes() {
 }
 
 export function SwRegister() {
-  const [online, setOnline] = useState(true);
+  const online = useOnline();
 
   useEffect(() => {
-    setOnline(navigator.onLine);
-    const up = () => setOnline(true);
-    const down = () => setOnline(false);
-    window.addEventListener("online", up);
-    window.addEventListener("offline", down);
-
     if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
       const register = () => {
         navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -41,11 +53,6 @@ export function SwRegister() {
       if (document.readyState === "complete") afterLoad();
       else window.addEventListener("load", afterLoad, { once: true });
     }
-
-    return () => {
-      window.removeEventListener("online", up);
-      window.removeEventListener("offline", down);
-    };
   }, []);
 
   if (online) return null;

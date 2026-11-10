@@ -3,11 +3,15 @@ import { eq } from "drizzle-orm";
 import { db, sqlite } from "@/db";
 import { uploads } from "@/db/schema";
 import { createHealthParser, type HealthRecordRow, type SummaryRow, type WorkoutRow } from "@/lib/xml";
+import { prefillProfile } from "@/lib/services/profile";
 
 export type IngestResult = { uploadId: number; inserted: number; duplicates: number };
 
 const CHUNK = Number(process.env.INGEST_CHUNK ?? 1000);
 const ZIP_SLICE = Number(process.env.INGEST_SLICE ?? 1 << 20);
+// A real 4-year export inflates to ~410 MB. 1.5 GiB leaves headroom without letting a
+// crafted zip decompress without bound (the zip itself is capped at 200 MB by the route).
+const MAX_XML_BYTES = Number(process.env.INGEST_MAX_XML ?? 1536 * 1024 * 1024);
 
 /**
  * Inserts go through raw prepared statements, not the query builder.
@@ -63,6 +67,7 @@ async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
   const seen: string[] = [];
   let sawEntry = false;
   let failure: Error | null = null;
+  let inflated = 0;
 
   const unzipper = new Unzip((file) => {
     seen.push(file.name);
@@ -70,7 +75,17 @@ async function* exportXmlChunks(zip: Uint8Array): AsyncGenerator<Uint8Array> {
     sawEntry = true;
     file.ondata = (err, chunk) => {
       if (err) failure = err instanceof Error ? err : new Error(String(err));
-      else if (chunk.length) ready.push(chunk);
+      else if (chunk.length) {
+        inflated += chunk.length;
+        if (inflated > MAX_XML_BYTES) {
+          failure = new Error(
+            `export.xml exceeds the ${(MAX_XML_BYTES / 1024 / 1024).toFixed(0)} MB uncompressed cap; ` +
+              `set INGEST_MAX_XML to raise it`,
+          );
+          return;
+        }
+        ready.push(chunk);
+      }
     };
     file.start();
   });
@@ -116,9 +131,40 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
     parser.end();
     flush();
 
+    // <Me> carries birth date and biological sex; height arrives as a quantity record.
+    // A prefill failure must not mark a fully imported file as failed.
+    let warning: string | null = null;
+    try {
+      const me = parser.characteristics();
+      const height = sqlite
+        .prepare(
+          `SELECT value, unit FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierHeight'
+           AND value > 0 ORDER BY start_ms DESC LIMIT 1`,
+        )
+        .get() as { value: number; unit: string } | undefined;
+      const heightCm = height
+        ? height.unit.toLowerCase() === "in"
+          ? height.value * 2.54
+          : height.unit.toLowerCase() === "ft"
+            ? height.value * 30.48
+            : height.value
+        : undefined;
+      if (me.dateOfBirth || me.biologicalSex || heightCm) {
+        prefillProfile({ birthDate: me.dateOfBirth, sex: me.biologicalSex, heightCm });
+      }
+    } catch (e) {
+      warning = `profile prefill skipped: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
     const duplicates = seen - inserted;
     await db.update(uploads)
-      .set({ status: "done", recordsInserted: inserted, recordsDuplicates: duplicates, finishedAtMs: Date.now() })
+      .set({
+        status: "done",
+        recordsInserted: inserted,
+        recordsDuplicates: duplicates,
+        finishedAtMs: Date.now(),
+        ...(warning ? { message: warning } : {}),
+      })
       .where(eq(uploads.id, handle.id));
     return { uploadId: handle.id, inserted, duplicates };
   } catch (e) {
