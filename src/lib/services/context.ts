@@ -5,7 +5,7 @@ import { addDays, localDay, localDayStartMs } from "@/lib/day";
 import { counts, sleepSummary, stepsSummary, workoutHistory } from "@/db/queries";
 import { dayNutrition, type DayNutrition } from "@/lib/services/nutrition";
 import { latestMeasurement, weightTrend, type Point } from "@/lib/services/measurements";
-import { ageOf, getProfile, getTimezone, isProfileStarted, type Profile } from "@/lib/services/profile";
+import { ageOf, getProfile, getTimezone, isProfileStarted, workSchedule, type Profile } from "@/lib/services/profile";
 import { nextSupplement, todayChecklist } from "@/lib/services/supplements";
 import { fail } from "@/lib/validate";
 
@@ -105,7 +105,11 @@ export type HealthContext = {
   generatedAt: string;
   today: string;
   timezone: string;
-  profile: Profile & { age: number | null; started: boolean };
+  profile: Profile & {
+    age: number | null;
+    started: boolean;
+    workSchedule: ReturnType<typeof workSchedule>;
+  };
   nutrition: DayNutrition;
   weight: { latest: Point | null; goalKg: number | null; change7dKg: number | null; points: Point[] };
   supplements: ReturnType<typeof todayChecklist>;
@@ -147,7 +151,12 @@ export function healthvaultContext(): HealthContext {
     generatedAt: new Date().toISOString(),
     today,
     timezone: tz,
-    profile: { ...profile, age: ageOf(profile, today), started: isProfileStarted(profile) },
+    profile: {
+      ...profile,
+      workSchedule: workSchedule(profile),
+      age: ageOf(profile, today),
+      started: isProfileStarted(profile),
+    },
     nutrition: dayNutrition(today),
     weight: {
       latest: latestMeasurement("weight"),

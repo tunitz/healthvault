@@ -32,10 +32,32 @@ day's rows from rolling windows. Timestamps in the UI are local wall-clock, not 
 the same LAN-facing server as the UI and deliberately has **no authentication** (single-user,
 local-only posture); do not expose port 3040 to the internet.
 
-Tools: `healthvault_context`, `profile_get`, `profile_update`, `measurement_add`,
-`measurement_history`, `food_search`, `food_add`, `meal_log`, `meal_update`, `meal_delete`,
-`nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_create`, `supplement_log`,
-`metrics_series`, `workouts_recent`.
+**Reads** — `healthvault_context`, `profile_get`, `measurement_history`, `food_search`,
+`nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`, `metrics_series`,
+`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`.
+
+**Writes** — `profile_update`, `measurement_add`, `food_add`, `meal_log`, `meal_update`,
+`nutrition_target_set`, `supplement_create`, `supplement_update`, `supplement_log`, `copy_day`.
+
+**Deletes** — `measurement_delete`, `food_delete`, `meal_delete`, `supplement_delete`.
+
+The surface covers every write the UI exposes, including the delete paths, plus the read-only
+aggregation behind `/api/type-stats` (`record_types`). `/api/upload` is deliberately **not**
+exposed to agents: importing an `Export.zip` stays a manual step in the UI, and `uploads_recent`
+only reports import history.
+
+`records_recent` serves raw rows for one type (default 50, max 500) and does **not** de-duplicate
+phone/watch overlaps — use `metrics_series` for any daily total or trend, since it picks one source
+per local day. `copy_day` copies `fromDay` into `toDay`, skips rows already present, and returns
+`copied` (`0` means already present, not a failure). `measurement_delete` removes manual
+measurements only; Apple `BodyMass` is immutable. `food_delete` returns 409 while a logged meal uses
+the food, and `supplement_delete` archives a supplement that has history and hard-deletes one that
+does not.
+
+Profile reads (`profile_get` and `context.profile`) parse the stored schedule into a `workSchedule`
+object — `{ days: [{ weekday, start, end }], note? }` — alongside the legacy `workScheduleJson`.
+Agent-facing numbers are rounded consistently: whole kcal and grams; one decimal for kg, km, hours
+and percent; never more than two decimals.
 
 `healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
 the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data

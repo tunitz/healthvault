@@ -6,22 +6,29 @@
  */
 
 import type {
+  CopyDayInput,
   FoodAddInput,
+  FoodDeleteInput,
   FoodSearchInput,
   HealthVaultClient,
   MealDeleteInput,
   MealLogInput,
   MealUpdateInput,
   MeasurementAddInput,
+  MeasurementDeleteInput,
   MeasurementHistoryInput,
   MetricsSeriesInput,
   NutritionDayInput,
   NutritionSummaryInput,
   NutritionTargetSetInput,
   ProfileUpdateInput,
+  RecordsRecentInput,
   SupplementCreateInput,
+  SupplementDeleteInput,
+  SupplementHistoryInput,
   SupplementLogInput,
   SupplementUpdateInput,
+  UploadsRecentInput,
   WorkoutsRecentInput,
 } from "./client";
 
@@ -38,7 +45,7 @@ export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly input: Record<string, unknown>;
-  readonly options: { readonly namespace: string };
+  readonly options: { readonly namespace: string; readonly codemode?: boolean };
   execute(
     input: unknown,
     context: ToolExecutionContext,
@@ -139,7 +146,7 @@ function defineTool<Input>(definition: {
     name: definition.name,
     description: definition.description,
     input: definition.input,
-    options: { namespace: TOOL_NAMESPACE },
+    options: { namespace: TOOL_NAMESPACE, codemode: false },
     execute: async (input, context) => {
       try {
         const result = await definition.run(input as Input, context.signal);
@@ -535,6 +542,119 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
       },
       run: (input, signal) => client.workoutsRecent(input, signal),
     }),
+
+    defineTool<MeasurementDeleteInput>({
+      name: "measurement_delete",
+      description:
+        "Permanently delete a manual body measurement, so this changes stored data; confirm the deletion with the user first. Only manual entries are removed — Apple BodyMass rows stay. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.measurementDelete(input, signal),
+    }),
+
+    defineTool<FoodDeleteInput>({
+      name: "food_delete",
+      description:
+        "Permanently delete a reusable food, so this changes stored data; confirm the deletion with the user first. Fails with 409 when the food is still used by a logged meal. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.foodDelete(input, signal),
+    }),
+
+    defineTool<CopyDayInput>({
+      name: "copy_day",
+      description:
+        "Copy a day's logged meals onto another day, so this writes logged data; confirm the target day with the user first. Rows already present on toDay are skipped, so the call is idempotent, and the result reports the copied count. Inputs: fromDay and toDay (YYYY-MM-DD, must differ); fails with 404 when fromDay has no entries.",
+      input: {
+        type: "object",
+        properties: {
+          fromDay: DAY_SCHEMA,
+          toDay: DAY_SCHEMA,
+        },
+        required: ["fromDay", "toDay"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.copyDay(input, signal),
+    }),
+
+    defineTool<Record<string, never>>({
+      name: "record_types",
+      description:
+        "Read-only Apple record-type statistics: each type's unit, record count, first and last day, sum, average and maximum. No inputs.",
+      input: NO_INPUT,
+      run: (_input, signal) => client.recordTypes(signal),
+    }),
+
+    defineTool<RecordsRecentInput>({
+      name: "records_recent",
+      description:
+        "Read raw Apple Health rows for one record type, newest first. Rows are NOT de-duplicated across phone and watch — use metrics_series for daily totals. Inputs: type (record type identifier, required) and limit (default 50, max 500).",
+      input: {
+        type: "object",
+        properties: {
+          type: { type: "string", minLength: 1, maxLength: 200 },
+          limit: { type: "integer", minimum: 1, maximum: 500 },
+        },
+        required: ["type"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.recordsRecent(input, signal),
+    }),
+
+    defineTool<UploadsRecentInput>({
+      name: "uploads_recent",
+      description:
+        "Read import history, newest first. Read-only: importing an Apple Health export stays a manual action. Inputs: limit (default 50, max 500).",
+      input: {
+        type: "object",
+        properties: {
+          limit: { type: "integer", minimum: 1, maximum: 500 },
+        },
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.uploadsRecent(input, signal),
+    }),
+
+    defineTool<SupplementHistoryInput>({
+      name: "supplement_history",
+      description:
+        "Read supplement adherence: days with at least one logged dose, newest first, each with the doses taken. Read-only. Inputs: days (default 30, max 366).",
+      input: {
+        type: "object",
+        properties: {
+          days: { type: "integer", minimum: 1, maximum: 366 },
+        },
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.supplementHistory(input, signal),
+    }),
+
+    defineTool<SupplementDeleteInput>({
+      name: "supplement_delete",
+      description:
+        "Remove a supplement regimen, so this changes stored data; confirm with the user first. Archives the supplement when intake history exists (deleted false, archived true), otherwise permanently deletes it. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.supplementDelete(input, signal),
+    }),
   ];
 }
 
@@ -559,6 +679,14 @@ export const TOOL_NAMES = [
   "healthvault_supplement_log",
   "healthvault_metrics_series",
   "healthvault_workouts_recent",
+  "healthvault_measurement_delete",
+  "healthvault_food_delete",
+  "healthvault_copy_day",
+  "healthvault_record_types",
+  "healthvault_records_recent",
+  "healthvault_uploads_recent",
+  "healthvault_supplement_history",
+  "healthvault_supplement_delete",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];

@@ -19,6 +19,14 @@ export const AGENT_TOOLS = [
   "supplement_log",
   "metrics_series",
   "workouts_recent",
+  "measurement_delete",
+  "food_delete",
+  "copy_day",
+  "record_types",
+  "records_recent",
+  "uploads_recent",
+  "supplement_history",
+  "supplement_delete",
 ] as const;
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];

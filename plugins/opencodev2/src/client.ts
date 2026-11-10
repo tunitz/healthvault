@@ -70,6 +70,7 @@ export type SuggestedTargets = Macros;
 
 export interface ProfileResult {
   profile: Profile;
+  workSchedule: WorkSchedule;
   age: number | null;
   suggestedTargets: SuggestedTargets;
 }
@@ -176,6 +177,10 @@ export interface MeasurementHistoryInput {
   days?: number;
 }
 
+export interface MeasurementDeleteInput {
+  id: number;
+}
+
 export interface FoodSearchInput {
   query?: string;
   limit?: number;
@@ -189,6 +194,10 @@ export interface FoodAddInput {
   per100g: MacrosInput;
   extra?: unknown;
   source?: string;
+}
+
+export interface FoodDeleteInput {
+  id: number;
 }
 
 export interface MealLogInput {
@@ -233,6 +242,16 @@ export interface NutritionTargetSetInput {
   fatG?: number;
   fibreG?: number;
   sodiumMg?: number;
+}
+
+export interface CopyDayInput {
+  fromDay: Day;
+  toDay: Day;
+}
+
+export interface CopyDayResult {
+  copied: number;
+  toDay: Day;
 }
 
 export interface NutritionDayTotals extends Macros {
@@ -345,6 +364,34 @@ export interface SupplementLogResult {
   supplement: Supplement;
 }
 
+export interface SupplementHistoryInput {
+  days?: number;
+}
+
+export interface SupplementHistoryItem {
+  name: string;
+  dose: number;
+  unit: string;
+  takenAtMs: number;
+}
+
+/** One day with at least one logged dose, newest day first. */
+export interface SupplementHistoryDay {
+  day: Day;
+  taken: number;
+  items: SupplementHistoryItem[];
+}
+
+export interface SupplementDeleteInput {
+  id: number;
+}
+
+/** `archived` is true when intake history exists, so the row is hidden instead of deleted. */
+export interface SupplementDeleteResult {
+  deleted: boolean;
+  archived: boolean;
+}
+
 export interface MetricsSeriesInput {
   metric: MetricsName;
   days?: number;
@@ -381,12 +428,59 @@ export interface WorkoutsRecentInput {
   limit?: number;
 }
 
+/** One Apple record type and its raw statistics, from the type-stats query. */
+export interface TypeStat {
+  typeIdentifier: string;
+  unit: string;
+  count: number;
+  firstDay: Day;
+  lastDay: Day;
+  sum: number;
+  avg: number;
+  max: number;
+}
+
+export interface RecordsRecentInput {
+  type: string;
+  limit?: number;
+}
+
+/** A raw Apple Health record. Rows are not de-duplicated across devices. */
+export interface RecordRow {
+  day: Day;
+  startDate: string;
+  endDate: string;
+  value: number;
+  unit: string;
+  sourceName: string | null;
+}
+
+export interface RecordsRecentResult {
+  type: string;
+  rows: RecordRow[];
+}
+
+export interface UploadsRecentInput {
+  limit?: number;
+}
+
+export interface UploadRow {
+  filename: string;
+  bytes: number;
+  status: string;
+  recordsInserted: number;
+  recordsDuplicates: number;
+  message: string | null;
+  createdAtMs: number;
+  finishedAtMs: number | null;
+}
+
 /** Everything `ctx` returns, typed at the level the tools are expected to use. */
 export interface HealthContext {
   generatedAt: string;
   today: Day;
   timezone: string;
-  profile: Profile & { age: number | null; started: boolean };
+  profile: Profile & { age: number | null; started: boolean; workSchedule: WorkSchedule };
   nutrition: DayNutrition;
   weight: {
     latest: MeasurementPoint | null;
@@ -434,11 +528,15 @@ export function createClient(options: ServerOptions = {}) {
       server.request<MeasurementRow>("measurement_add", input, signal),
     measurementHistory: (input: MeasurementHistoryInput = {}, signal?: AbortSignal) =>
       server.request<MeasurementPoint[]>("measurement_history", input, signal),
+    measurementDelete: (input: MeasurementDeleteInput, signal?: AbortSignal) =>
+      server.request<{ deleted: boolean }>("measurement_delete", input, signal),
 
     foodSearch: (input: FoodSearchInput = {}, signal?: AbortSignal) =>
       server.request<Food[]>("food_search", input, signal),
     foodAdd: (input: FoodAddInput, signal?: AbortSignal) =>
       server.request<Food>("food_add", input, signal),
+    foodDelete: (input: FoodDeleteInput, signal?: AbortSignal) =>
+      server.request<{ deleted: boolean }>("food_delete", input, signal),
 
     mealLog: (input: MealLogInput, signal?: AbortSignal) =>
       server.request<{ day: Day; meal: Meal; entries: FoodEntry[] }>(
@@ -457,6 +555,8 @@ export function createClient(options: ServerOptions = {}) {
       server.request<NutritionSummaryResult>("nutrition_summary", input, signal),
     nutritionTargetSet: (input: NutritionTargetSetInput, signal?: AbortSignal) =>
       server.request<Targets>("nutrition_target_set", input, signal),
+    copyDay: (input: CopyDayInput, signal?: AbortSignal) =>
+      server.request<CopyDayResult>("copy_day", input, signal),
 
     supplementList: (signal?: AbortSignal) =>
       server.request<SupplementListResult>("supplement_list", {}, signal),
@@ -466,11 +566,21 @@ export function createClient(options: ServerOptions = {}) {
       server.request<Supplement>("supplement_update", input, signal),
     supplementLog: (input: SupplementLogInput, signal?: AbortSignal) =>
       server.request<SupplementLogResult>("supplement_log", input, signal),
+    supplementHistory: (input: SupplementHistoryInput = {}, signal?: AbortSignal) =>
+      server.request<SupplementHistoryDay[]>("supplement_history", input, signal),
+    supplementDelete: (input: SupplementDeleteInput, signal?: AbortSignal) =>
+      server.request<SupplementDeleteResult>("supplement_delete", input, signal),
 
     metricsSeries: (input: MetricsSeriesInput, signal?: AbortSignal) =>
       server.request<MetricsSeriesResult>("metrics_series", input, signal),
     workoutsRecent: (input: WorkoutsRecentInput = {}, signal?: AbortSignal) =>
       server.request<Workout[]>("workouts_recent", input, signal),
+    recordTypes: (signal?: AbortSignal) =>
+      server.request<TypeStat[]>("record_types", {}, signal),
+    recordsRecent: (input: RecordsRecentInput, signal?: AbortSignal) =>
+      server.request<RecordsRecentResult>("records_recent", input, signal),
+    uploadsRecent: (input: UploadsRecentInput = {}, signal?: AbortSignal) =>
+      server.request<UploadRow[]>("uploads_recent", input, signal),
   };
 }
 

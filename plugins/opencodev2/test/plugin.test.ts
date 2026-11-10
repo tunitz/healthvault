@@ -143,3 +143,172 @@ describe("HealthVault agent client", () => {
     expect(caught.message).toContain(`http://127.0.0.1:${port}`);
   });
 });
+
+describe("HealthVault agent client — extended tool surface", () => {
+  /** Stub one tool and record the exact request the client sends. */
+  function stubResult(tool: string, result: unknown) {
+    let seen: { method: string; path: string; body: string } | undefined;
+    const baseUrl = startStub(async (request) => {
+      seen = {
+        method: request.method,
+        path: new URL(request.url).pathname,
+        body: await request.text(),
+      };
+      return Response.json({ ok: true, tool, result });
+    });
+    return { baseUrl, seen: () => seen };
+  }
+
+  test("measurement_delete posts the id and returns the deletion result", async () => {
+    const stub = stubResult("measurement_delete", { deleted: true });
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    expect(await client.measurementDelete({ id: 7 })).toEqual({ deleted: true });
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/measurement_delete",
+      body: '{"id":7}',
+    });
+  });
+
+  test("food_delete posts the id", async () => {
+    const stub = stubResult("food_delete", { deleted: true });
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    expect(await client.foodDelete({ id: 12 })).toEqual({ deleted: true });
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/food_delete",
+      body: '{"id":12}',
+    });
+  });
+
+  test("copy_day posts both days and returns the copied count", async () => {
+    const stub = stubResult("copy_day", { copied: 3, toDay: "2026-11-11" });
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    expect(
+      await client.copyDay({ fromDay: "2026-11-10", toDay: "2026-11-11" }),
+    ).toEqual({ copied: 3, toDay: "2026-11-11" });
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/copy_day",
+      body: '{"fromDay":"2026-11-10","toDay":"2026-11-11"}',
+    });
+  });
+
+  test("record_types posts an empty JSON object", async () => {
+    const stub = stubResult("record_types", [
+      {
+        typeIdentifier: "HKQuantityTypeIdentifierStepCount",
+        unit: "count",
+        count: 10,
+        firstDay: "2026-11-01",
+        lastDay: "2026-11-10",
+        sum: 12345,
+        avg: 1234.5,
+        max: 4000,
+      },
+    ]);
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    const stats = await client.recordTypes();
+    expect(stats).toHaveLength(1);
+    expect(stats[0]?.typeIdentifier).toBe("HKQuantityTypeIdentifierStepCount");
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/record_types",
+      body: "{}",
+    });
+  });
+
+  test("records_recent posts the type and limit and returns raw rows", async () => {
+    const stub = stubResult("records_recent", {
+      type: "HKQuantityTypeIdentifierStepCount",
+      rows: [
+        {
+          day: "2026-11-10",
+          startDate: "2026-11-10 08:00:00 +0100",
+          endDate: "2026-11-10 08:05:00 +0100",
+          value: 120,
+          unit: "count",
+          sourceName: "iPhone",
+        },
+      ],
+    });
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    const result = await client.recordsRecent({
+      type: "HKQuantityTypeIdentifierStepCount",
+      limit: 25,
+    });
+    expect(result.type).toBe("HKQuantityTypeIdentifierStepCount");
+    expect(result.rows).toHaveLength(1);
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/records_recent",
+      body: '{"type":"HKQuantityTypeIdentifierStepCount","limit":25}',
+    });
+  });
+
+  test("uploads_recent posts an empty object when no limit is given", async () => {
+    const stub = stubResult("uploads_recent", [
+      {
+        filename: "export.zip",
+        bytes: 1024,
+        status: "done",
+        recordsInserted: 10,
+        recordsDuplicates: 2,
+        message: null,
+        createdAtMs: 1,
+        finishedAtMs: 2,
+      },
+    ]);
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    const uploads = await client.uploadsRecent();
+    expect(uploads[0]?.filename).toBe("export.zip");
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/uploads_recent",
+      body: "{}",
+    });
+  });
+
+  test("supplement_history posts the day window", async () => {
+    const stub = stubResult("supplement_history", [
+      {
+        day: "2026-11-10",
+        taken: 1,
+        items: [{ name: "Vitamin D", dose: 1000, unit: "IU", takenAtMs: 5 }],
+      },
+    ]);
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    const history = await client.supplementHistory({ days: 30 });
+    expect(history[0]?.items[0]?.name).toBe("Vitamin D");
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/supplement_history",
+      body: '{"days":30}',
+    });
+  });
+
+  test("supplement_delete posts the id and reports archive-vs-delete", async () => {
+    const stub = stubResult("supplement_delete", {
+      deleted: false,
+      archived: true,
+    });
+    const client = createClient({ baseUrl: stub.baseUrl });
+
+    expect(await client.supplementDelete({ id: 4 })).toEqual({
+      deleted: false,
+      archived: true,
+    });
+    expect(stub.seen()).toEqual({
+      method: "POST",
+      path: "/api/agent/supplement_delete",
+      body: '{"id":4}',
+    });
+  });
+});

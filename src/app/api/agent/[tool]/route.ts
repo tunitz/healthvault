@@ -5,14 +5,17 @@ import {
 } from "@/lib/services/context";
 import {
   addMeasurement,
+  deleteMeasurement,
   KINDS,
   latestMeasurement,
   measurementHistory,
 } from "@/lib/services/measurements";
 import {
   addFood,
+  copyDay,
   dayNutrition,
   deleteEntry,
+  deleteFood,
   logMeal,
   nutritionRange,
   resolveTargets,
@@ -20,18 +23,26 @@ import {
   setTargets,
   updateEntry,
 } from "@/lib/services/nutrition";
-import { ageOf, getProfile, suggestedTargets, updateProfile } from "@/lib/services/profile";
+import {
+  ageOf,
+  getProfile,
+  suggestedTargets,
+  updateProfile,
+  workSchedule,
+} from "@/lib/services/profile";
 import {
   createSupplement,
+  deleteSupplement,
   listSupplements,
   logSupplement,
+  supplementHistory,
   todayChecklist,
   updateSupplement,
 } from "@/lib/services/supplements";
-import { workoutHistory } from "@/db/queries";
+import { recentUploads, recordsForType, typeStats, workoutHistory } from "@/db/queries";
 import { currentDay } from "@/lib/services/context";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
-import { ValidationError, dayField, enumField, numField, readJson } from "@/lib/validate";
+import { ValidationError, dayField, enumField, fail, numField, readJson, str } from "@/lib/validate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +65,7 @@ const TOOLS = {
     const profile = getProfile();
     return {
       profile,
+      workSchedule: workSchedule(profile),
       age: ageOf(profile, currentDay()),
       suggestedTargets: suggestedTargets(profile, latestMeasurement("weight")?.value ?? 75),
     };
@@ -94,6 +106,33 @@ const TOOLS = {
 
   metrics_series: (body: Record<string, unknown>) => metricsSeries(body.metric, daysField(body.days, 30, 730)),
   workouts_recent: (body: Record<string, unknown>) => workoutHistory(limitField(body.limit, 10, 500)),
+
+  measurement_delete: (body: Record<string, unknown>) => {
+    const result = deleteMeasurement(body.id);
+    if (!result.deleted) fail("measurement not found", 404);
+    return result;
+  },
+  food_delete: (body: Record<string, unknown>) => {
+    const result = deleteFood(body.id);
+    if (!result.deleted) fail("food not found", 404);
+    return result;
+  },
+  copy_day: (body: Record<string, unknown>) =>
+    copyDay(dayField(body.fromDay, "fromDay"), dayField(body.toDay, "toDay")),
+
+  record_types: () => typeStats(),
+  records_recent: (body: Record<string, unknown>) => {
+    const type = str(body.type, "type", { required: true, max: 200 })!;
+    return { type, rows: recordsForType(type, limitField(body.limit, 50, 500)) };
+  },
+  uploads_recent: (body: Record<string, unknown>) => recentUploads(limitField(body.limit, 50, 500)),
+
+  supplement_history: (body: Record<string, unknown>) => supplementHistory(daysField(body.days, 30, 366)),
+  supplement_delete: (body: Record<string, unknown>) => {
+    const result = deleteSupplement(body.id);
+    if (!result.deleted && !result.archived) fail("supplement not found", 404);
+    return result;
+  },
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
 export async function GET() {
