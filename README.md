@@ -39,8 +39,19 @@ Tools: `healthvault_context`, `profile_get`, `profile_update`, `measurement_add`
 
 `healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
 the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data
-freshness (last import, last record day). The OpenCode plugin lives in `plugins/opencodev2/` and is
-registered in `.opencode/opencode.jsonc`; it calls `http://127.0.0.1:3040`.
+freshness (last import, last record day). The OpenCode plugin lives in `plugins/opencodev2/`; register
+it once in the global `~/.config/opencode/opencode.jsonc` so every project gets the tools:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "/home/tunitz/projects/healthvault/plugins/opencodev2",
+      "options": { "baseUrl": "http://127.0.0.1:3040" }
+    }
+  ]
+}
+```
 
 ## Upgrading from an earlier import
 
