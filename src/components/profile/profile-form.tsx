@@ -3,6 +3,7 @@
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
 import { saveProfileAction, saveWorkScheduleAction } from "@/app/actions";
+import { formatHeight, type Units } from "@/lib/units";
 import type { Profile } from "@/lib/services/profile";
 
 const SELECT =
@@ -12,7 +13,15 @@ const AREA =
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-export function ProfileForm({ profile, age }: { profile: Profile; age: number | null }) {
+export function ProfileForm({
+  profile,
+  age,
+  units,
+}: {
+  profile: Profile;
+  age: number | null;
+  units: Units;
+}) {
   return (
     <ActionForm action={saveProfileAction} className="grid gap-4 sm:grid-cols-2">
       <Field label="Name">
@@ -32,7 +41,14 @@ export function ProfileForm({ profile, age }: { profile: Profile; age: number | 
         </select>
       </Field>
 
-      <Field label="Height (cm)">
+      <Field
+        label="Height (cm)"
+        hint={
+          profile.heightCm && units === "imperial"
+            ? `Shown as ${formatHeight(profile.heightCm, units)}`
+            : "Used for suggestions"
+        }
+      >
         <Input name="heightCm" type="number" inputMode="decimal" step="0.1" min="50" max="260" defaultValue={profile.heightCm ?? ""} />
       </Field>
 
@@ -87,29 +103,34 @@ export function WorkScheduleForm({
         {WEEKDAYS.map((label, weekday) => {
           const entry = byDay.get(weekday);
           return (
-            <div key={weekday} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 py-2">
-              <input
-                type="checkbox"
-                name={`enabled-${weekday}`}
-                defaultChecked={Boolean(entry)}
-                aria-label={label}
-                className="size-4 accent-[var(--primary)]"
-              />
-              <span className="text-sm">{label}</span>
-              <Input
-                type="time"
-                name={`start-${weekday}`}
-                defaultValue={entry?.start ?? "09:00"}
-                aria-label={`${label} start`}
-                className="w-28"
-              />
-              <Input
-                type="time"
-                name={`end-${weekday}`}
-                defaultValue={entry?.end ?? "17:00"}
-                aria-label={`${label} end`}
-                className="w-28"
-              />
+            <div key={weekday} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
+              <label className="flex items-center gap-2 text-sm sm:w-28">
+                <input
+                  type="checkbox"
+                  name={`enabled-${weekday}`}
+                  defaultChecked={Boolean(entry)}
+                  aria-label={label}
+                  className="size-4 accent-[var(--primary)]"
+                />
+                <span>{label}</span>
+              </label>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-none">
+                <Input
+                  type="time"
+                  name={`start-${weekday}`}
+                  defaultValue={entry?.start ?? "09:00"}
+                  aria-label={`${label} start`}
+                  className="min-w-[8rem] flex-1 px-2.5 tabular-nums max-sm:h-11 sm:w-36 sm:flex-none"
+                />
+                <span className="text-xs text-muted-foreground">to</span>
+                <Input
+                  type="time"
+                  name={`end-${weekday}`}
+                  defaultValue={entry?.end ?? "17:00"}
+                  aria-label={`${label} end`}
+                  className="min-w-[8rem] flex-1 px-2.5 tabular-nums max-sm:h-11 sm:w-36 sm:flex-none"
+                />
+              </div>
             </div>
           );
         })}

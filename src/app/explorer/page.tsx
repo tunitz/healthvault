@@ -1,8 +1,11 @@
+import type { Metadata } from "next";
 import { ExplorerClient } from "@/components/explorer-client";
-import { typeStats } from "@/db/queries";
+import { recordsForType, typeStats } from "@/db/queries";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Explorer" };
 
 export default function ExplorerPage() {
   const types = typeStats();
@@ -16,5 +19,11 @@ export default function ExplorerPage() {
       </div>
     );
   }
-  return <ExplorerClient types={types} />;
+  const first = types[0];
+  return (
+    <ExplorerClient
+      types={types}
+      initial={{ type: first.typeIdentifier, rows: recordsForType(first.typeIdentifier) }}
+    />
+  );
 }

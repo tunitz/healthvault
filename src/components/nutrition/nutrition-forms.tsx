@@ -160,20 +160,20 @@ export function RecentFoods({
   if (recent.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground">Recent</p>
-      <div className="flex flex-wrap gap-1.5">
+      <p className="text-xs font-medium text-muted-foreground">Recent</p>
+      <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
         {recent.map((food) => (
-          <span
+          <li
             key={`${food.name}-${food.foodId ?? "raw"}`}
-            className="inline-flex max-w-full items-center gap-1 rounded-md border border-border px-2 py-1 text-xs"
+            className="flex min-w-0 items-baseline gap-1"
           >
-            <span className="truncate">{food.name}</span>
+            <span className="truncate text-foreground">{food.name}</span>
             <span className="num shrink-0 text-muted-foreground">
               {num(food.grams, 0)} g · {num(food.kcal, 0)} kcal
             </span>
-          </span>
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -275,10 +275,13 @@ export function TargetsForm({ day, targets }: { day: string; targets: Targets })
 
 export function CopyDayForm({ day, previousDay }: { day: string; previousDay: string }) {
   return (
-    <ActionForm action={copyDayAction} className="inline-flex flex-col items-end gap-1">
+    <ActionForm
+      action={copyDayAction}
+      className="flex w-full flex-col items-stretch gap-1 sm:inline-flex sm:w-auto sm:items-end"
+    >
       <input type="hidden" name="fromDay" value={previousDay} />
       <input type="hidden" name="toDay" value={day} />
-      <SubmitButton variant="outline" size="sm">
+      <SubmitButton variant="outline" size="sm" className="w-full sm:w-auto">
         Copy {previousDay.slice(5)}
       </SubmitButton>
     </ActionForm>

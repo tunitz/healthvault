@@ -227,6 +227,9 @@ export async function copyDayAction(_prev: ActionState, fd: FormData): Promise<A
   try {
     const result = copyDay(text(fd, "fromDay") ?? "", text(fd, "toDay") ?? "");
     refresh("/nutrition", "/");
+    if (result.copied === 0) {
+      return { ok: true, message: "Already present — nothing copied" };
+    }
     return {
       ok: true,
       message: result.copied === 1 ? "Copied 1 entry" : `Copied ${result.copied} entries`,

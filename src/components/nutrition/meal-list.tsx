@@ -19,12 +19,12 @@ const MEALS: { key: Meal; label: string }[] = [
 
 export function MealList({ meals }: { meals: Record<Meal, FoodEntry[]> }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid items-start gap-4 md:grid-cols-2">
       {MEALS.map(({ key, label }) => {
         const entries = meals[key];
         const kcal = entries.reduce((sum, entry) => sum + entry.kcal, 0);
         return (
-          <section key={key} className="rounded-xl border border-border p-4">
+          <section key={key} className="min-w-0 rounded-xl border border-border p-4">
             <div className="flex items-baseline justify-between gap-3">
               <h3 className="text-sm font-medium">{label}</h3>
               <span className="num text-xs text-muted-foreground">{num(kcal, 0)} kcal</span>
@@ -50,7 +50,12 @@ export function MealList({ meals }: { meals: Record<Meal, FoodEntry[]> }) {
                     </div>
 
                     <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-muted-foreground">Edit</summary>
+                      <summary
+                        aria-label={`Edit ${entry.name}`}
+                        className="cursor-pointer text-xs text-muted-foreground"
+                      >
+                        Edit
+                      </summary>
                       <ActionForm action={updateEntryAction} className="mt-2 grid gap-2">
                         <input type="hidden" name="id" value={entry.id} />
                         <input type="hidden" name="old-kcal" value={entry.kcal} />
@@ -109,9 +114,13 @@ export function MealList({ meals }: { meals: Record<Meal, FoodEntry[]> }) {
                       </ActionForm>
                     </details>
 
-                    <ActionForm action={deleteEntryAction} className="mt-1">
+                    <ActionForm
+                      action={deleteEntryAction}
+                      className="mt-1"
+                      confirm={`Delete ${entry.name}? This cannot be undone.`}
+                    >
                       <input type="hidden" name="id" value={entry.id} />
-                      <SubmitButton variant="ghost" size="xs">
+                      <SubmitButton variant="ghost" size="xs" aria-label={`Delete ${entry.name}`}>
                         Delete
                       </SubmitButton>
                     </ActionForm>

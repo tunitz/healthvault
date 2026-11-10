@@ -1,5 +1,6 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import { addDays, dayLabel, isDay, lastDays } from "@/lib/day";
+import { addDays, dayHeading, isDay, lastDays } from "@/lib/day";
 import { getTimezone } from "@/lib/services/profile";
 import { currentDay } from "@/lib/services/context";
 import {
@@ -27,6 +28,8 @@ import { NutritionTrendChart } from "@/components/nutrition/nutrition-trend-char
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Nutrition" };
+
 function MacroBar({
   label,
   value,
@@ -41,10 +44,14 @@ function MacroBar({
   color: string;
 }) {
   const pct = target > 0 ? (value / target) * 100 : 0;
+  const over = value > target;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="text-muted-foreground">{label}</span>
+        <span className={over ? "font-medium text-destructive" : "text-muted-foreground"}>
+          {label}
+          {over ? " · over" : ""}
+        </span>
         <span className="num">
           {num(value, 1)} / {num(target, 0)} {unit}
         </span>
@@ -53,11 +60,18 @@ function MacroBar({
         role="progressbar"
         aria-label={label}
         aria-valuemin={0}
-        aria-valuemax={Math.round(target)}
-        aria-valuenow={Math.round(value)}
+        aria-valuemax={100}
+        aria-valuenow={Math.min(100, Math.max(0, Math.round(pct)))}
+        aria-valuetext={`${num(value, 1)} of ${num(target, 0)} ${unit}${over ? " (over target)" : ""}`}
         className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
       >
-        <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: color }} />
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${Math.min(100, Math.max(0, pct))}%`,
+            background: over ? "var(--destructive)" : color,
+          }}
+        />
       </div>
     </div>
   );
@@ -67,12 +81,15 @@ function MacroSummary({ data }: { data: ReturnType<typeof dayNutrition> }) {
   const pct = data.targets.kcal > 0 ? (data.totals.kcal / data.targets.kcal) * 100 : 0;
   const over = pct > 100;
   const ring = Math.min(100, Math.max(0, pct));
+  const kcalOver = data.remaining.kcal < 0;
 
   return (
     <div className="grid gap-6 rounded-xl border border-border p-4 sm:grid-cols-[auto_1fr] sm:items-center">
       <div
         role="img"
-        aria-label={`${num(data.totals.kcal, 0)} of ${num(data.targets.kcal, 0)} kcal`}
+        aria-label={`${num(data.totals.kcal, 0)} of ${num(data.targets.kcal, 0)} kcal${
+          kcalOver ? `, ${num(Math.abs(data.remaining.kcal), 0)} over` : ""
+        }`}
         className="relative mx-auto size-28 shrink-0 rounded-full"
         style={{
           background: `conic-gradient(${over ? "var(--destructive)" : "var(--chart-1)"} ${ring}%, var(--muted) 0)`,
@@ -80,8 +97,8 @@ function MacroSummary({ data }: { data: ReturnType<typeof dayNutrition> }) {
       >
         <div className="absolute inset-2 grid place-items-center rounded-full bg-card text-center">
           <div>
-            <p className="num text-xl font-semibold tracking-tight">{num(data.remaining.kcal, 0)}</p>
-            <p className="text-[11px] text-muted-foreground">kcal left</p>
+            <p className="num text-xl font-semibold tracking-tight">{num(Math.abs(data.remaining.kcal), 0)}</p>
+            <p className="text-[11px] text-muted-foreground">{kcalOver ? "kcal over" : "kcal left"}</p>
           </div>
         </div>
       </div>
@@ -134,34 +151,36 @@ export default async function NutritionPage(props: {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Nutrition</h1>
         <p className="text-sm text-muted-foreground">
-          {dayLabel(day)} · {day} · {timezone}
+          {dayHeading(day)} · {timezone}
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button asChild variant="outline" size="icon-sm" aria-label="Previous day">
-          <Link href={`/nutrition?day=${addDays(day, -1)}&range=${range}`}>
-            <ChevronLeft aria-hidden />
-          </Link>
-        </Button>
-        <form method="get" className="flex items-center gap-2">
-          <Input type="date" name="day" defaultValue={day} aria-label="Day" className="w-auto" />
-          <input type="hidden" name="range" value={range} />
-          <Button type="submit" variant="outline" size="sm">
-            Go
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="icon-sm" aria-label="Previous day">
+            <Link href={`/nutrition?day=${addDays(day, -1)}&range=${range}`}>
+              <ChevronLeft aria-hidden />
+            </Link>
           </Button>
-        </form>
-        <Button asChild variant="outline" size="icon-sm" aria-label="Next day">
-          <Link href={`/nutrition?day=${addDays(day, 1)}&range=${range}`}>
-            <ChevronRight aria-hidden />
-          </Link>
-        </Button>
-        {day !== today ? (
-          <Button asChild variant="ghost" size="sm">
-            <Link href={`/nutrition?day=${today}&range=${range}`}>Today</Link>
+          <form method="get" className="flex min-w-0 items-center gap-2">
+            <Input type="date" name="day" defaultValue={day} aria-label="Day" className="w-auto min-w-0 max-sm:h-11" />
+            <input type="hidden" name="range" value={range} />
+            <Button type="submit" variant="outline" size="sm">
+              Go
+            </Button>
+          </form>
+          <Button asChild variant="outline" size="icon-sm" aria-label="Next day">
+            <Link href={`/nutrition?day=${addDays(day, 1)}&range=${range}`}>
+              <ChevronRight aria-hidden />
+            </Link>
           </Button>
-        ) : null}
-        <div className="ml-auto">
+          {day !== today ? (
+            <Button asChild variant="ghost" size="sm">
+              <Link href={`/nutrition?day=${today}&range=${range}`}>Today</Link>
+            </Button>
+          ) : null}
+        </div>
+        <div className="w-full sm:ms-auto sm:w-auto">
           <CopyDayForm day={day} previousDay={previousDay} />
         </div>
       </div>
@@ -183,7 +202,7 @@ export default async function NutritionPage(props: {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-col gap-0.5">
             <h2 className="text-sm font-medium">Trend</h2>
-            <p className="text-xs text-muted-foreground">Eaten calories against the target in effect on each day.</p>
+            <p className="text-xs text-muted-foreground">Eaten against that day&apos;s target.</p>
           </div>
           <div className="flex gap-1">
             <Button asChild variant={range === 7 ? "secondary" : "ghost"} size="xs">
@@ -198,9 +217,7 @@ export default async function NutritionPage(props: {
       </section>
 
       {data.entries.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          Nothing logged for {day}. Add an entry above, copy the previous day, or ask the agent to log a meal.
-        </p>
+        <p className="text-xs text-muted-foreground">Nothing logged for this day.</p>
       ) : null}
     </div>
   );

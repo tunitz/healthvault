@@ -34,19 +34,30 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
   });
 
   const present = KEYS.filter((k) => rows.some((r) => Number(r[k]) > 0));
+  const nightTotals = rows.map((row) =>
+    KEYS.filter((key) => key !== "inBed").reduce((sum, key) => sum + Number(row[key]), 0),
+  );
+  const avgHours = nightTotals.length
+    ? nightTotals.reduce((sum, hours) => sum + hours, 0) / nightTotals.length
+    : 0;
 
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-col gap-0.5">
         <h2 className="text-sm font-medium">Sleep by stage</h2>
         <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">
-          Hours asleep per night (InBed rows excluded: they cover the whole night and would double count)
+          Hours asleep per night; InBed rows are excluded
         </p>
       </div>
       {present.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">No data in this range</p>
       ) : (
-        <ChartContainer config={config} className="h-[200px] w-full sm:h-[260px]">
+        <ChartContainer
+          config={config}
+          role="img"
+          aria-label={`Sleep by stage chart, ${rows.length} nights`}
+          className="h-[200px] w-full sm:h-[260px]"
+        >
           <BarChart data={rows} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
             <XAxis
@@ -82,6 +93,11 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
           </BarChart>
         </ChartContainer>
       )}
+      {present.length ? (
+        <p className="text-xs text-muted-foreground">
+          Average {r2(avgHours, 1)} h over {rows.length} nights.
+        </p>
+      ) : null}
     </section>
   );
 }

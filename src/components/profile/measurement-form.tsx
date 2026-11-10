@@ -4,6 +4,7 @@ import { useState } from "react";
 import { addMeasurementAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
+import { waistUnit, weightUnit, type Units } from "@/lib/units";
 
 const SELECT =
   "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
@@ -14,9 +15,21 @@ const KIND_LABEL: Record<string, { value: string; unit?: string[] }> = {
   waist: { value: "Waist", unit: ["cm", "in"] },
 };
 
-export function MeasurementForm({ today, defaultTime }: { today: string; defaultTime: string }) {
+export function MeasurementForm({
+  today,
+  defaultTime,
+  units,
+}: {
+  today: string;
+  defaultTime: string;
+  units: Units;
+}) {
   const [kind, setKind] = useState<keyof typeof KIND_LABEL>("weight");
   const meta = KIND_LABEL[kind];
+  const preferredUnit =
+    kind === "weight" ? weightUnit(units) : kind === "waist" ? waistUnit(units) : meta.unit?.[0];
+  const placeholder =
+    kind === "weight" ? (units === "imperial" ? "176" : "80") : kind === "bodyFat" ? "20" : units === "imperial" ? "35" : "90";
 
   return (
     <ActionForm action={addMeasurementAction} resetOnSuccess className="grid gap-3 sm:grid-cols-2">
@@ -30,11 +43,11 @@ export function MeasurementForm({ today, defaultTime }: { today: string; default
 
       <div className="grid grid-cols-[1fr_auto] items-end gap-2">
         <Field label={meta.value}>
-          <Input name="value" type="number" inputMode="decimal" step="0.1" min="0" required placeholder={kind === "weight" ? "80" : kind === "bodyFat" ? "20" : "90"} />
+          <Input name="value" type="number" inputMode="decimal" step="0.1" min="0" required placeholder={placeholder} />
         </Field>
         {meta.unit ? (
           <Field label="Unit">
-            <select name="unit" defaultValue={meta.unit[0]} className={SELECT}>
+            <select key={kind} name="unit" defaultValue={preferredUnit} className={SELECT}>
               {meta.unit.map((unit) => (
                 <option key={unit} value={unit}>
                   {unit}

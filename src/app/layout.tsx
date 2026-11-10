@@ -10,7 +10,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Health Vault",
+  title: { default: "Health Vault", template: "%s · Health Vault" },
   description: "Apple Health export explorer",
   // Personal health data on a LAN-bound single-user app: never index it.
   robots: { index: false, follow: false },
@@ -35,10 +35,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-[calc(env(safe-area-inset-top)+0.75rem)] focus:start-4 focus:z-50 focus:rounded-md focus:border focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg"
+        >
+          Skip to content
+        </a>
         <ThemeProvider>
           <AppNav />
           <SwRegister />
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))] md:px-6 md:pb-10">
+          <main
+            id="main"
+            tabIndex={-1}
+            className="mx-auto w-full max-w-6xl flex-1 scroll-mt-[calc(3.5rem+env(safe-area-inset-top))] px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))] outline-none md:px-6 md:pb-10"
+          >
             {children}
           </main>
           <Toaster />

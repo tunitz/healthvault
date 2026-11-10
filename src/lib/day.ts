@@ -151,6 +151,17 @@ export function dayLabel(day: string): string {
   });
 }
 
+/** One readable date heading: "Tue, Nov 10, 2026" (no second copy of the ISO date). */
+export function dayHeading(day: string): string {
+  return new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /** Wall-clock "HH:mm" right now in a zone. Kept here so server components never call
  * `Date.now()` during render (which React flags as unstable output). */
 export function localClockNow(tz: string = DEFAULT_TIMEZONE): string {

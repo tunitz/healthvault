@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
@@ -13,9 +14,12 @@ import {
 } from "@/db/queries";
 import { healthvaultContext } from "@/lib/services/context";
 import { compact, instant, num, plural } from "@/lib/format";
-import { dayLabel, daysBetween } from "@/lib/day";
+import { formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
+import { dayHeading, daysBetween } from "@/lib/day";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: { absolute: "Dashboard · Health Vault" } };
 
 function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -89,6 +93,7 @@ export default function DashboardPage() {
   const remainingKcal = context.nutrition.remaining.kcal;
   const weight = context.weight.latest;
   const goal = context.weight.goalKg;
+  const units = resolveUnits(context.profile.units);
   const next = context.nextSupplement;
   const supplements = context.supplements;
   const lastUpload = context.data.lastUpload;
@@ -112,9 +117,9 @@ export default function DashboardPage() {
       <section className="flex flex-col gap-3">
         <div className="flex items-baseline justify-between gap-3">
           <h2 className="text-sm font-medium">Today</h2>
-          <p className="text-xs text-muted-foreground">{dayLabel(context.today)} · {context.today}</p>
+          <p className="text-xs text-muted-foreground">{dayHeading(context.today)}</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <TodayCard
             label="Calories"
             value={remainingKcal < 0 ? `${num(Math.abs(remainingKcal), 0)} over` : `${num(remainingKcal, 0)} left`}
@@ -122,12 +127,12 @@ export default function DashboardPage() {
           />
           <TodayCard
             label="Weight"
-            value={weight ? `${num(weight.value)} kg` : "—"}
+            value={formatWeight(weight?.value, units)}
             hint={[
               weight ? weight.source === "manual" ? "manual" : "Apple" : "not logged",
-              goal !== null ? `goal ${num(goal)} kg` : null,
+              goal !== null ? `goal ${formatWeight(goal, units)}` : null,
               context.weight.change7dKg !== null
-                ? `${context.weight.change7dKg >= 0 ? "+" : ""}${num(context.weight.change7dKg)} kg / 7d`
+                ? `${formatWeightDelta(context.weight.change7dKg, units)} / 7d`
                 : null,
             ]
               .filter(Boolean)
@@ -162,16 +167,20 @@ export default function DashboardPage() {
         </p>
       </section>
 
-      <div className="grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
+      <div
+        className={`grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-3 ${
+          showMoveMinutes ? "lg:grid-cols-4" : "lg:grid-cols-3"
+        }`}
+      >
         <Metric
           label="Steps (last 30 days)"
           value={compact(context.training.steps.totalInWindow)}
-          hint={`${num(context.training.steps.avgPerDay)} / day average · ${compact(context.training.steps.allTimeSteps)} all time`}
+          hint={`${num(context.training.steps.avgPerDay, 0)} / day average · ${compact(context.training.steps.allTimeSteps)} all time`}
         />
         <Metric
           label="Sleep (last 30 days)"
-          value={`${num(context.training.sleep.avgPerNight)} h`}
-          hint={`${plural(context.training.sleep.nights, "night")} · ${num(context.training.sleep.totalHours)} h total`}
+          value={`${num(context.training.sleep.avgPerNight, 1)} h`}
+          hint={`${plural(context.training.sleep.nights, "night")} · ${num(context.training.sleep.totalHours, 0)} h total`}
         />
         <Metric
           label="Active energy (last 30 days)"
@@ -182,7 +191,7 @@ export default function DashboardPage() {
           <Metric
             label="Move minutes (last 30 days)"
             value={compact(activity.moveMinutes)}
-            hint="Apple Move minutes from activity summaries"
+            hint="From activity summaries"
           />
         ) : null}
       </div>

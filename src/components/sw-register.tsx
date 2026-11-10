@@ -2,7 +2,8 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
-const PREFETCH_ROUTES = ["/", "/training", "/nutrition", "/supplements", "/profile", "/workouts", "/explorer", "/uploads"];
+// Only the primary tabs; the More destinations stay network-first until visited.
+const PREFETCH_ROUTES = ["/", "/training", "/nutrition", "/supplements"];
 
 function subscribeOnline(callback: () => void) {
   window.addEventListener("online", callback);
@@ -48,7 +49,14 @@ export function SwRegister() {
       else window.addEventListener("load", register, { once: true });
 
       // Prefetch once the page has loaded and the SW controls it (first visit: after controllerchange).
-      const afterLoad = () => setTimeout(maybePrefetch, 0);
+      // Wait for idle so the first paint is not competing with four page fetches.
+      const afterLoad = () => {
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(maybePrefetch, { timeout: 3000 });
+        } else {
+          globalThis.setTimeout(maybePrefetch, 1500);
+        }
+      };
       navigator.serviceWorker.addEventListener("controllerchange", afterLoad);
       if (document.readyState === "complete") afterLoad();
       else window.addEventListener("load", afterLoad, { once: true });

@@ -32,6 +32,16 @@ export function minutes(seconds: number | null): string {
   return `${Math.round(seconds / 60)} min`;
 }
 
+/** Long durations as hours and minutes: 10,000 s -> "2 h 47 min". */
+export function duration(seconds: number | null): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const totalMinutes = Math.round(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const rest = totalMinutes % 60;
+  if (hours === 0) return `${rest} min`;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
 export function typeLabel(identifier: string): string {
   return identifier
     .replace(/^HK(Quantity|Category|Correlation)TypeIdentifier/, "")
@@ -43,14 +53,14 @@ export function workoutLabel(identifier: string): string {
   return identifier.replace(/^HKWorkoutActivityType/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
 }
 
-/** Heart-rate intensity band. Kept here (not in the chart module, which is a client
- * component) because server components need it too. */
-export function hrZone(hr: number | null | undefined): { label: string; className: string } {
-  if (hr === null || hr === undefined) return { label: "—", className: "text-muted-foreground" };
-  if (hr < 120) return { label: "easy", className: "text-emerald-400" };
-  if (hr < 145) return { label: "steady", className: "text-amber-400" };
-  if (hr < 165) return { label: "hard", className: "text-orange-400" };
-  return { label: "max", className: "text-rose-400" };
+/** Heart-rate intensity band. The zone is carried by a coloured dot; the label stays in
+ * neutral foreground text so it keeps its contrast in light mode. */
+export function hrZone(hr: number | null | undefined): { label: string; dot: string } {
+  if (hr === null || hr === undefined) return { label: "—", dot: "bg-muted-foreground/40" };
+  if (hr < 120) return { label: "easy", dot: "bg-emerald-600 dark:bg-emerald-400" };
+  if (hr < 145) return { label: "steady", dot: "bg-amber-600 dark:bg-amber-400" };
+  if (hr < 165) return { label: "hard", dot: "bg-orange-600 dark:bg-orange-400" };
+  return { label: "max", dot: "bg-rose-600 dark:bg-rose-400" };
 }
 
 /** At most 2 decimal places, trailing zeros trimmed. User rule: every number in the UI is

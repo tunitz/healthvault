@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -8,16 +9,13 @@ import {
   heartRateDaily, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta, vo2MaxDaily,
   weeklyTraining, workoutHistory, workoutTotals, workoutTrend,
 } from "@/db/queries";
-import { compact, hrZone, minutes, num, plural, workoutLabel } from "@/lib/format";
-
-const ZONE_TEXT: Record<string, string> = {
-  easy: "text-chart-1",
-  steady: "text-chart-2",
-  hard: "text-chart-4",
-  max: "text-destructive",
-};
+import { compact, duration, hrZone, num, plural, workoutLabel } from "@/lib/format";
+import { formatDistance, formatPace, resolveUnits } from "@/lib/units";
+import { getProfile } from "@/lib/services/profile";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Training" };
 
 function Metric({ title, value, hint, delta }: {
   title: string; value: string; hint?: string; delta?: string | null;
@@ -35,6 +33,7 @@ function Metric({ title, value, hint, delta }: {
 const pct = (v: number | null, unit = "%") => (v === null ? "no comparison" : `${v >= 0 ? "+" : ""}${num(v, 0)}${unit} vs previous 30 days`);
 
 export default function TrainingPage() {
+  const units = resolveUnits(getProfile().units);
   const steps = stepsDaily(90);
   const last30 = workoutTotals(30);
   const delta = trendDelta(30);
@@ -83,22 +82,21 @@ export default function TrainingPage() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
         <p className="text-sm text-muted-foreground">
-          Steps, heart rate, pace and volume. Each day is read from a single device — phone and watch overlap in
-          time, so adding them together would inflate every number.
+          Steps, heart rate, pace and volume. One device per day — phone and watch are never added together.
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
         <Metric
           title="Steps / day (90d)"
-          value={compact(stepAvg)}
+          value={compact(Math.round(stepAvg))}
           hint={steps.at(-1) ? `source: ${steps.at(-1)!.source}` : undefined}
         />
         <Metric
           title="Distance (30d)"
-          value={`${num(last30.km ?? 0, 1)} km`}
+          value={formatDistance(last30.km ?? 0, units)}
           delta={pct(delta.kmChangePct)}
-          hint={`${plural(last30.sessions, "session")} · ${minutes((last30.minutes ?? 0) * 60)}`}
+          hint={`${plural(last30.sessions, "session")} · ${duration((last30.minutes ?? 0) * 60)}`}
         />
         <Metric
           title="Avg workout HR (30d)"
@@ -117,9 +115,9 @@ export default function TrainingPage() {
       <StepsChart data={steps} />
 
       <div className="grid gap-10 lg:grid-cols-2">
-        <WeeklyVolumeChart data={weekly} />
+        <WeeklyVolumeChart data={weekly} units={units} />
         <WorkoutHrChart data={runs} />
-        <PaceTrendChart data={runs} />
+        <PaceTrendChart data={runs} units={units} />
         <FitnessTrendChart resting={resting} vo2={vo2} />
       </div>
 
@@ -129,7 +127,7 @@ export default function TrainingPage() {
         <div className="flex flex-col gap-0.5">
           <h2 className="text-sm font-medium">Recent workouts</h2>
           <p className="text-xs text-muted-foreground">
-            Pace is derived from distance and duration; the heart-rate colour is the intensity band.
+            Pace from distance and duration; the dot is the intensity band.
           </p>
         </div>
         <Table>
@@ -154,13 +152,22 @@ export default function TrainingPage() {
                   <TableCell><span className="block max-w-[7.5rem] truncate md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
                   <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
                   <TableCell className="num text-right">
-                    {w.km === null ? "—" : `${num(w.km, 2)} km`}
+                    {formatDistance(w.km, units, 2)}
                   </TableCell>
                   <TableCell className="num hidden text-right md:table-cell">
-                    {w.paceMinPerKm === null ? "—" : `${num(w.paceMinPerKm, 2)} /km`}
+                    {formatPace(w.paceMinPerKm, units)}
                   </TableCell>
-                  <TableCell className={`num hidden text-right md:table-cell ${ZONE_TEXT[zone.label] ?? ""}`}>
-                    {w.avgHr === null ? "—" : `${num(w.avgHr, 0)} ${zone.label}`}
+                  <TableCell className="num hidden text-right md:table-cell">
+                    {w.avgHr === null ? (
+                      "—"
+                    ) : (
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <span aria-hidden className={`size-2 shrink-0 rounded-full ${zone.dot}`} />
+                        <span>
+                          {num(w.avgHr, 0)} {zone.label}
+                        </span>
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="num hidden text-right md:table-cell">
                     {w.maxHr === null ? "—" : num(w.maxHr, 0)}
@@ -178,25 +185,22 @@ export default function TrainingPage() {
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-0.5">
           <h2 className="text-sm font-medium">Where the numbers come from</h2>
-          <p className="text-xs text-muted-foreground">
-            Devices that recorded these metrics, so a surprising total can be traced to its origin.
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {devices.map((d) => (
-            <Badge key={d.source} variant="outline" className="gap-1.5 px-2.5 py-1 font-normal">
+            <Badge
+              key={d.source}
+              variant="outline"
+              className="h-auto max-w-full flex-wrap gap-1.5 whitespace-normal px-2.5 py-1 font-normal break-words"
+            >
               <span className="num text-foreground">{compact(d.steps)} steps</span>
               <span className="text-muted-foreground">·</span>
               <span className="num text-foreground">{compact(d.hr)} heart rate</span>
               <span className="text-muted-foreground">·</span>
-              {d.source}
+              <span className="min-w-0">{d.source}</span>
             </Badge>
           ))}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Only one device is counted per day — the one with the most samples — so these are never added
-          together.
-        </p>
       </section>
     </div>
   );

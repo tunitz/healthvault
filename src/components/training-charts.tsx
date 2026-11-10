@@ -5,6 +5,14 @@ import {
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { compact, num, r2 } from "@/lib/format";
+import {
+  distanceUnit,
+  formatDistance,
+  paceUnitLabel,
+  toDisplayDistance,
+  toDisplayPace,
+  type Units,
+} from "@/lib/units";
 
 /**
  * Training visuals. Colours come from the theme chart tokens (--chart-1..5) and the neutral
@@ -44,8 +52,8 @@ const tip = {
 
 const xTicks = { tickMargin: 8, minTickGap: 40, interval: "preserveStartEnd" as const };
 
-function Section({ title, description, children }: {
-  title: string; description: string; children: React.ReactNode;
+function Section({ title, description, summary, children }: {
+  title: string; description: string; summary?: string; children: React.ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-3">
@@ -54,6 +62,7 @@ function Section({ title, description, children }: {
         <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">{description}</p>
       </div>
       {children}
+      {summary ? <p className="text-xs text-muted-foreground">{summary}</p> : null}
     </section>
   );
 }
@@ -64,9 +73,9 @@ function Empty({ children }: { children: string }) {
 
 const NO_RANGE = "No data in this range";
 
-function Chart({ children }: { children: React.ReactElement }) {
+function Chart({ label, children }: { label: string; children: React.ReactElement }) {
   return (
-    <div className="h-[200px] w-full sm:h-[260px]">
+    <div role="img" aria-label={label} className="h-[200px] w-full sm:h-[260px]">
       <ResponsiveContainer width="100%" height="100%">
         {children}
       </ResponsiveContainer>
@@ -80,10 +89,11 @@ export function StepsChart({ data }: { data: { day: string; value: number; sourc
   return (
     <Section
       title="Steps per day"
-      description={source ? `From ${source} — one device per day, sources are never summed together` : "No step records yet"}
+      description={source ? `From ${source} — one device per day` : "No step records yet"}
+      summary={data.length ? `Average ${compact(Math.round(avg))} steps/day over ${data.length} days.` : undefined}
     >
       {data.length === 0 ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
+        <Chart label="Steps per day chart">
           <AreaChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
             <defs>
               <linearGradient id="gSteps" x1="0" y1="0" x2="0" y2="1">
@@ -109,14 +119,27 @@ export function StepsChart({ data }: { data: { day: string; value: number; sourc
   );
 }
 
-export function WeeklyVolumeChart({ data }: { data: { weekStart: string; weekEnd: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null }[] }) {
+export function WeeklyVolumeChart({ data, units }: {
+  data: { weekStart: string; weekEnd: string; sessions: number; minutes: number | null; km: number | null; avgHr: number | null }[];
+  units: Units;
+}) {
   // hover shows the actual Sunday–Saturday span, not just the first day of the week
   const range = new Map(data.map((d) => [d.weekStart, `${d.weekStart} → ${d.weekEnd}`]));
+  const rows = data.map((d) => ({ ...d, km: d.km === null ? null : toDisplayDistance(d.km, units) }));
+  const latest = data[data.length - 1];
   return (
-    <Section title="Weekly training volume" description="Minutes trained per week, with distance on the right axis">
+    <Section
+      title="Weekly training volume"
+      description="Minutes per week, distance on the right axis"
+      summary={
+        latest
+          ? `Latest week: ${num(latest.minutes ?? 0, 0)} min, ${formatDistance(latest.km, units)}.`
+          : undefined
+      }
+    >
       {data.length === 0 || data.every((d) => d.minutes === null && d.km === null) ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
-          <ComposedChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
+        <Chart label={`Weekly training volume chart, ${data.length} weeks`}>
+          <ComposedChart data={rows} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke={C.grid} />
             <XAxis dataKey="weekStart" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
             <YAxis width={44} {...axis} domain={[0, "auto"]} tickFormatter={(v: number) => compact(v)} />
@@ -124,7 +147,12 @@ export function WeeklyVolumeChart({ data }: { data: { weekStart: string; weekEnd
             <Tooltip
               {...tip}
               labelFormatter={(label) => range.get(String(label)) ?? String(label)}
-              formatter={(v, name) => [name === "km" ? `${r2(Number(v))} km` : `${r2(Number(v))} min`, name]}
+              formatter={(v, name) => [
+                name === distanceUnit(units)
+                  ? `${r2(Number(v))} ${distanceUnit(units)}`
+                  : `${r2(Number(v))} min`,
+                name,
+              ]}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Bar
@@ -137,7 +165,7 @@ export function WeeklyVolumeChart({ data }: { data: { weekStart: string; weekEnd
               minPointSize={3}
               fillOpacity={0.85}
             />
-            <Line yAxisId="km" dataKey="km" name="km" type="monotone" stroke={C.distance} strokeWidth={2} dot={{ r: 2.5 }} />
+            <Line yAxisId="km" dataKey="km" name={distanceUnit(units)} type="monotone" stroke={C.distance} strokeWidth={2} dot={{ r: 2.5 }} />
           </ComposedChart>
         </Chart>
       )}
@@ -145,18 +173,28 @@ export function WeeklyVolumeChart({ data }: { data: { weekStart: string; weekEnd
   );
 }
 
-export function PaceTrendChart({ data }: { data: { day: string; paceMinPerKm: number | null; km: number | null; avgHr: number | null }[] }) {
-  const points = data.filter((d) => d.paceMinPerKm !== null);
+export function PaceTrendChart({ data, units }: { data: { day: string; paceMinPerKm: number | null; km: number | null; avgHr: number | null }[]; units: Units }) {
+  const points = data
+    .filter((d) => d.paceMinPerKm !== null)
+    .map((d) => ({ ...d, paceMinPerKm: toDisplayPace(d.paceMinPerKm!, units) }));
   return (
-    <Section title="Run pace" description="Minutes per km — lower is faster, so the line going down is progress">
+    <Section
+      title="Run pace"
+      description={`Minutes per ${units === "imperial" ? "mile" : "km"} — lower is faster`}
+      summary={
+        points.length
+          ? `Latest ${num(points[points.length - 1].paceMinPerKm, 2)} ${paceUnitLabel(units)} across ${points.length} runs.`
+          : undefined
+      }
+    >
       {points.length === 0 ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
+        <Chart label={`Run pace chart, ${points.length} runs`}>
           <LineChart data={points} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke={C.grid} />
             <XAxis dataKey="day" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
             <YAxis width={44} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => r2(v)} />
-            <Tooltip {...tip} formatter={(v) => [`${Number(v).toFixed(2)} min/km`, "pace"]} />
-            <Line dataKey="paceMinPerKm" name="min/km" type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
+            <Tooltip {...tip} formatter={(v) => [`${Number(v).toFixed(2)} ${paceUnitLabel(units)}`, "pace"]} />
+            <Line dataKey="paceMinPerKm" name={paceUnitLabel(units)} type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
           </LineChart>
         </Chart>
       )}
@@ -170,10 +208,11 @@ export function WorkoutHrChart({ data }: { data: { day: string; avgHr: number | 
   return (
     <Section
       title="Heart rate per workout"
-      description="Average and peak from the workout itself. At the same pace, a falling average means you are getting fitter."
+      description="Average and peak per workout; at the same pace, a falling average means progress"
+      summary={points.length ? `Latest average ${num(points[points.length - 1].avgHr, 0)} bpm; mean ${num(avg, 0)} bpm.` : undefined}
     >
       {points.length === 0 ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
+        <Chart label={`Heart rate per workout chart, ${points.length} workouts`}>
           <ComposedChart data={points} margin={{ left: 0, right: 8, top: 8 }}>
             <defs>
               <linearGradient id="gMaxHr" x1="0" y1="0" x2="0" y2="1">
@@ -209,10 +248,15 @@ export function FitnessTrendChart({ resting, vo2 }: {
   return (
     <Section
       title="Fitness trend"
-      description="Resting heart rate (bpm) and VO2max (ml/kg/min) — resting HR down and VO2max up both mean progress"
+      description="Resting heart rate and VO2max; resting HR down and VO2max up both mean progress"
+      summary={
+        resting.length || vo2.length
+          ? `Latest resting ${num(resting[resting.length - 1]?.value, 0)} bpm, VO2max ${num(vo2[vo2.length - 1]?.value, 1)}.`
+          : undefined
+      }
     >
       {data.length === 0 ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
+        <Chart label="Resting heart rate and VO2max chart">
           <LineChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke={C.grid} />
             <XAxis dataKey="day" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
@@ -230,10 +274,15 @@ export function FitnessTrendChart({ resting, vo2 }: {
 }
 
 export function HeartRateDailyChart({ data }: { data: { day: string; value: number; source: string }[] }) {
+  const avg = data.length ? data.reduce((sum, d) => sum + d.value, 0) / data.length : 0;
   return (
-    <Section title="Daily heart rate" description="Average of each day's samples from a single source">
+    <Section
+      title="Daily heart rate"
+      description="Average of each day's samples from a single source"
+      summary={data.length ? `Latest ${num(data[data.length - 1].value, 0)} bpm; mean ${num(avg, 0)} bpm.` : undefined}
+    >
       {data.length === 0 ? <Empty>{NO_RANGE}</Empty> : (
-        <Chart>
+        <Chart label={`Daily heart rate chart, ${data.length} days`}>
           <AreaChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
             <defs>
               <linearGradient id="gHr" x1="0" y1="0" x2="0" y2="1">

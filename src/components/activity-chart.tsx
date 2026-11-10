@@ -21,16 +21,22 @@ export function ActivityChart({
 }: {
   data: { day: string; activeEnergy: number | null; activeEnergyGoal: number | null }[];
 }) {
+  const latest = [...data].reverse().find((point) => point.activeEnergy !== null);
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-col gap-0.5">
         <h2 className="text-sm font-medium">Active energy vs goal</h2>
-        <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">From ActivitySummary rings recorded by Apple Watch</p>
+        <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">Activity rings recorded by Apple Watch</p>
       </div>
       {!data.some((d) => d.activeEnergy !== null || d.activeEnergyGoal !== null) ? (
         <p className="py-12 text-center text-sm text-muted-foreground">No data in this range</p>
       ) : (
-        <ChartContainer config={config} className="h-[200px] w-full sm:h-[260px]">
+        <ChartContainer
+          config={config}
+          role="img"
+          aria-label={`Active energy against goal chart, ${data.length} days`}
+          className="h-[200px] w-full sm:h-[260px]"
+        >
           <BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
             <XAxis
@@ -57,6 +63,12 @@ export function ActivityChart({
           </BarChart>
         </ChartContainer>
       )}
+      {latest ? (
+        <p className="text-xs text-muted-foreground">
+          Latest {r2(latest.activeEnergy ?? 0, 0)} kcal
+          {latest.activeEnergyGoal === null ? "" : ` of ${r2(latest.activeEnergyGoal, 0)} kcal`} on {latest.day}.
+        </p>
+      ) : null}
     </section>
   );
 }

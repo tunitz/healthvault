@@ -44,3 +44,6 @@ next-env.d.ts
 /data/
 *.db-wal
 *.db-shm
+
+# playwright-cli session artifacts
+/.playwright-cli/

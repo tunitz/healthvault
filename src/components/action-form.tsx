@@ -38,11 +38,14 @@ export function ActionForm({
   className,
   children,
   resetOnSuccess = false,
+  confirm,
 }: {
   action: ActionFn;
   className?: string;
   children: React.ReactNode;
   resetOnSuccess?: boolean;
+  /** Hard deletes have no undo, so the browser asks before the action runs. */
+  confirm?: string;
 }) {
   const [state, formAction] = useActionState<ActionState, FormData>(action, { ok: true });
   const ref = useRef<HTMLFormElement>(null);
@@ -52,7 +55,14 @@ export function ActionForm({
   }, [state, resetOnSuccess]);
 
   return (
-    <form ref={ref} action={formAction} className={className}>
+    <form
+      ref={ref}
+      action={formAction}
+      className={className}
+      onSubmit={(event) => {
+        if (confirm && !window.confirm(confirm)) event.preventDefault();
+      }}
+    >
       {children}
       {state.error ? (
         <p role="alert" className="text-xs text-destructive">
