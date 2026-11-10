@@ -1,5 +1,9 @@
 # HealthVault production deployment
 
+> Host-specific doc: this describes the maintainer's long-running systemd host. For the generic,
+> host-agnostic production setup (fresh machine, bun only), see the Installation section in the
+> main `README.md`.
+
 Production uses the normal Next.js server output. `bun run build` (`next build`)
 writes `.next/`; the service runs `next start` from this directory. There is no
 standalone or single-binary build, and no Bun native compilation.
@@ -59,6 +63,15 @@ The app unit requires the auth credentials and fails fast without them:
 `HEALTHVAULT_API_TOKEN_FILE=%h/.config/healthvault/token` (0600). `UMask=0077` keeps files created
 by the service owner-only. The backup timer runs `bun run db:backup` daily at 03:30 (persistent
 catch-up) and prunes backups older than 14 days.
+
+Credentials are managed with the repo script — on this host it targets
+`~/.config/healthvault/auth.env` automatically because that file exists (the target is always
+printed; `--file` overrides):
+
+```bash
+cd /home/tunitz/projects/healthvault
+bun run password:set && systemctl --user restart healthvault
+```
 
 Do not commit `.next/`, `data/`, or `node_modules/`.
 

@@ -15,8 +15,8 @@ export const DEFAULT_TIMEOUT_MS = 15_000;
 /** Default token file, kept tilde-form so error messages stay readable. */
 export const DEFAULT_TOKEN_FILE = "~/.config/healthvault/token";
 
-const START_HINT = "systemctl --user start healthvault";
-const STATUS_HINT = "systemctl --user status healthvault";
+/** Host-agnostic startup hint: the app may run under any supervisor or bare shell. */
+const START_HINT = "`bun run start` in the HealthVault project directory";
 
 export interface ServerOptions {
   /** Base URL of the running app. Defaults to `HEALTHVAULT_URL` or `http://127.0.0.1:3040`. */
@@ -239,14 +239,14 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
       if (timedOut) {
         throw new HealthVaultError(
           `HealthVault did not respond within ${timeoutMs} ms at ${baseUrl}. ` +
-            `Check the service with "${STATUS_HINT}" and start it with "${START_HINT}".`,
+            `Check the service (GET /api/health) and start it with: ${START_HINT}.`,
           { tool, reason: error },
         );
       }
 
       throw new HealthVaultError(
         `HealthVault service is not reachable at ${baseUrl} — start it with: ${START_HINT} ` +
-          `(check it with "${STATUS_HINT}").`,
+          `(check it with GET /api/health).`,
         { tool, reason: error },
       );
     } finally {

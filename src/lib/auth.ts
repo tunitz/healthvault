@@ -1,5 +1,12 @@
-import { createHmac, scryptSync, timingSafeEqual } from "node:crypto";
-import { getAuthConfig } from "@/lib/auth-config";
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import type { PasswordHash } from "@/lib/auth-config";
+import {
+  PASSWORD_HASH_KEY_BYTES,
+  PASSWORD_HASH_PARAMS,
+  PASSWORD_HASH_SALT_BYTES,
+  getAuthConfig,
+  parsePasswordHash,
+} from "@/lib/auth-config";
 
 export const SESSION_COOKIE = "hv_session";
 
@@ -17,15 +24,47 @@ export class AuthenticationError extends Error {
   }
 }
 
-export function verifyPassword(password: string): boolean {
-  const { passwordHash } = getAuthConfig();
+function matchesPasswordHash(password: string, passwordHash: PasswordHash): boolean {
   const derived = scryptSync(password, passwordHash.salt, passwordHash.hash.length, {
     N: passwordHash.N,
     r: passwordHash.r,
     p: passwordHash.p,
     maxmem: SCRYPT_MAXMEM,
   });
-  return timingSafeEqual(derived, passwordHash.hash);
+  return derived.length === passwordHash.hash.length && timingSafeEqual(derived, passwordHash.hash);
+}
+
+export function verifyPassword(password: string): boolean {
+  return matchesPasswordHash(password, getAuthConfig().passwordHash);
+}
+
+/**
+ * Hash a new password with the canonical scrypt parameters and output the exact
+ * `scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>` string that auth-config parses.
+ */
+export function hashPassword(password: string): string {
+  const { N, r, p } = PASSWORD_HASH_PARAMS;
+  const salt = randomBytes(PASSWORD_HASH_SALT_BYTES);
+  const hash = scryptSync(password, salt, PASSWORD_HASH_KEY_BYTES, {
+    N,
+    r,
+    p,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return `scrypt:${N}:${r}:${p}:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+/**
+ * Verify a password against a raw hash string without loading auth config, so it
+ * works when the session secret or API token are absent (e.g. the password CLI).
+ * A malformed hash simply does not match.
+ */
+export function verifyPasswordHash(password: string, rawHash: string): boolean {
+  try {
+    return matchesPasswordHash(password, parsePasswordHash(rawHash));
+  } catch {
+    return false;
+  }
 }
 
 function sessionMac(expires: string, secret: string): string {

@@ -33,8 +33,11 @@ boot without valid credentials.
 
 | Credential | Used by | Stored in |
 |---|---|---|
-| Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in `~/.config/healthvault/auth.env` (0600) |
-| Bearer token (`Authorization: Bearer`) | agents / MCP clients on `/api/agent/*` | `~/.config/healthvault/token` (0600); `HEALTHVAULT_API_TOKEN` env wins (Docker/remote) |
+| Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in the credentials env file (0600) |
+| Bearer token (`Authorization: Bearer`) | agents / MCP clients on `/api/agent/*` | token file, default `~/.config/healthvault/token` (0600); `HEALTHVAULT_API_TOKEN` env wins (Docker/remote) |
+
+The credentials env file is the project-root `.env` (git-ignored, mode 0600, loaded automatically
+by Next.js) — `bun run password:set` creates and maintains it for you.
 
 `/api/agent/*` accepts **only** the bearer token (no cookies), which removes CSRF from the agent
 surface. Everything else requires the session cookie: unauthenticated pages redirect to `/login`,
@@ -45,18 +48,20 @@ Environment variables: `DATABASE_PATH`, `HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAUL
 `HEALTHVAULT_API_TOKEN`, `HEALTHVAULT_API_TOKEN_FILE`, `HEALTHVAULT_COOKIE_SECURE` (set `1` behind
 TLS), `HEALTHVAULT_SESSION_DAYS`.
 
-**Change the password** (the initial deploy may use a placeholder):
+**Set or change the password:**
 
 ```bash
-read -rsp "Password: " pw; echo
-bun -e 'const c=require("node:crypto");const s=c.randomBytes(16);const h=c.scryptSync(process.argv[1],s,32,{N:16384,r:8,p:1});console.log(`HEALTHVAULT_PASSWORD_HASH=scrypt:16384:8:1:${s.toString("hex")}:${h.toString("hex")}`)' "$pw"
-unset pw
+bun run password:set       # hidden prompt; never takes the password as an argument
+bun run password:verify    # check a password against the stored hash
 ```
 
-Replace the `HEALTHVAULT_PASSWORD_HASH=` line in `~/.config/healthvault/auth.env` with the printed
-line, then `systemctl --user restart healthvault`. Existing sessions stay valid until they expire;
-bump `HEALTHVAULT_SESSION_SECRET` (and restart) to invalidate them all. Rotating the bearer token:
-overwrite `~/.config/healthvault/token`, restart the service, and restart MCP clients.
+`password:set` writes the scrypt hash to the credentials env file and, on a fresh setup, also
+generates the `HEALTHVAULT_SESSION_SECRET` and the agent token file. By default it targets
+`~/.config/healthvault/auth.env` when that file already exists (hosts that inject credentials from
+an external file), otherwise the project `.env`; pass `--file <path>` to choose explicitly — the
+chosen target is always printed. Restart the app after changing credentials. Existing sessions stay
+valid until they expire; regenerate `HEALTHVAULT_SESSION_SECRET` to invalidate them all. Rotating
+the bearer token: overwrite the token file, restart the app, and restart MCP clients.
 
 ## Agent API and MCP
 
@@ -69,7 +74,7 @@ every harness can run (OpenCode, Claude Code, Claude Desktop, Cursor, …). Inst
 once:
 
 ```bash
-bun install -g /home/tunitz/projects/healthvault/plugins/healthvault
+bun install -g ./plugins/healthvault    # from the project directory
 ```
 
 See `plugins/healthvault/README.md` for per-harness config snippets. Clients with no MCP support can
@@ -177,10 +182,8 @@ bun run dev                          # http://localhost:3000
 ```
 
 `bun run build && bun run start` for production. Dev and start both fail fast without credentials:
-provide `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` (env or
-`~/.config/healthvault/auth.env` on this host) and a bearer token
-(`~/.config/healthvault/token` or `HEALTHVAULT_API_TOKEN`). `next build` itself needs none.
-The database file defaults to `./data/health.db`
+run `bun run password:set` once (see Authentication) — it creates everything needed. `next build`
+itself needs no credentials. The database file defaults to `./data/health.db`
 (git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. Migrations run on every
 boot inside `src/db/index.ts` (`migrate()` from the drizzle better-sqlite3 migrator) — a fresh file
 is brought up to schema automatically.
@@ -196,10 +199,10 @@ bun run db:backup                                  # data/backups/health-<timest
 bun run db:backup /path/to/health-2026-11-10.db    # explicit destination
 ```
 
-It runs `PRAGMA integrity_check` first, writes the copy mode 600, and prints the size. On the host,
-`healthvault-backup.timer` runs this daily (03:30, persistent catch-up) and prunes backups older
-than 14 days. Restore by
-stopping the service, replacing `data/health.db` (and deleting any `-wal`/`-shm` sidecars), then
+It runs `PRAGMA integrity_check` first, writes the copy mode 600, and prints the size. Schedule it
+with whatever supervisor you run the app under (the maintainer's host uses a daily systemd timer
+with 14-day retention — see `deploy/README.md`). Restore by
+stopping the app, replacing `data/health.db` (and deleting any `-wal`/`-shm` sidecars), then
 starting it again.
 
 ## Security posture
@@ -218,38 +221,39 @@ There are **no committed tests**: the test suites were removed deliberately (sin
 tool). Verification is `bun run typecheck && bun run lint && bun run build` plus the live checks in
 `deploy/README.md`. Do not read the missing tests as a safety net that still exists.
 
-## Installation (host, systemd)
+## Installation
+
+Fresh machine, fresh clone — bun only:
 
 ```bash
-# 1. credentials (once)
-mkdir -p ~/.config/healthvault && chmod 700 ~/.config/healthvault
-openssl rand -hex 32 > ~/.config/healthvault/token && chmod 600 ~/.config/healthvault/token
-#    password hash + session secret -> ~/.config/healthvault/auth.env (0600);
-#    see "Change the password" above and .env.example for the exact format.
+# 1. get the app
+git clone https://github.com/tunitz/healthvault && cd healthvault
+bun install
 
-# 2. build
-cd /home/tunitz/projects/healthvault
-bun install && bun run build
+# 2. credentials (once): prompts for the login password with hidden input,
+#    writes .env (0600) with the scrypt hash + a generated session secret,
+#    and creates the agent token file (~/.config/healthvault/token, 0600).
+bun run password:set
 
-# 3. service units (user units; the service fails fast if credentials are missing)
-ln -sfn "$PWD/deploy/systemd/healthvault.service" ~/.config/systemd/user/healthvault.service
-ln -sfn "$PWD/deploy/systemd/healthvault-backup.service" ~/.config/systemd/user/healthvault-backup.service
-ln -sfn "$PWD/deploy/systemd/healthvault-backup.timer" ~/.config/systemd/user/healthvault-backup.timer
-systemctl --user daemon-reload
-systemctl --user enable --now healthvault healthvault-backup.timer
+# 3. build + run (PORT/HOSTNAME are Next's own env vars; default port 3000)
+bun run build
+PORT=3040 HOSTNAME=0.0.0.0 bun run start
 
 # 4. MCP server for agents (once, per host)
-bun install -g /home/tunitz/projects/healthvault/plugins/healthvault
-#    then add the harness config; see plugins/healthvault/README.md
+bun install -g ./plugins/healthvault
+#    then add your harness config; see plugins/healthvault/README.md
 
 # 5. verify
 curl -s http://127.0.0.1:3040/api/health          # {"ok":true} without auth
-#    open http://<lan-ip>:3040 -> redirects to /login
+bun run password:verify                            # checks your password
+#    open http://<host>:3040 -> redirects to /login
 ```
 
-**Upgrade:** `bun run db:backup && systemctl --user stop healthvault && git pull && bun install &&
-bun run build && systemctl --user start healthvault`, then smoke-test (`/api/health`, login, one
-MCP read). The backup timer runs daily with 14-day retention. **Rollback:** `git checkout <sha>`,
+Run the app under whatever supervisor you prefer (tmux, runit, systemd, …); example systemd user
+units plus a daily backup timer for a long-running host live in `deploy/` (see `deploy/README.md`).
+
+**Upgrade:** `bun run db:backup`, stop the app, `git pull && bun install && bun run build`, start
+it, then smoke-test (`/api/health`, login, one MCP read). **Rollback:** `git checkout <sha>`,
 rebuild, restart — auth adds no migration, so the database is unaffected.
 
 ## Ingest design (why it streams)
@@ -300,9 +304,10 @@ src/app/             dashboard (/), login, training, workouts, explorer, uploads
                      profile, nutrition, supplements + api/auth, api/health,
                      api/upload, api/type-stats, api/agent
 src/components/      charts, explorer client, upload form, login form, app nav, ui/* (shadcn)
-scripts/backup-db.ts WAL-safe online backup (the only ops script)
+scripts/backup-db.ts WAL-safe online backup
+scripts/password.ts  password:set / password:verify credential tool
 plugins/healthvault/ MCP stdio server exposing the agent API to any harness
-deploy/              systemd units, backup timer, Caddyfile.example, deploy README
+deploy/              systemd units + backup timer (maintainer's host), Caddyfile.example, deploy README
 ```
 
 ## Troubleshooting
@@ -321,7 +326,7 @@ of saying the native sqlite module could not be loaded. It is never a code bug. 
 
 **MCP tools return 401** — the bearer token changed or is missing: check
 `~/.config/healthvault/token`, then restart the MCP client/harness. **Connection refused** — start
-the service: `systemctl --user start healthvault`.
+the app: start it (`PORT=3040 bun run start`, or via your supervisor).
 
 ## Verify
 

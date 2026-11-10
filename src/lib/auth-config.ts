@@ -30,7 +30,11 @@ export type AuthConfig = Readonly<{
 }>;
 
 const DEFAULT_SESSION_DAYS = 30;
-const HASH_FORMAT = "scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>";
+export const PASSWORD_HASH_FORMAT = "scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>";
+/** Canonical scrypt parameters. Password hashing and verification both read them from here. */
+export const PASSWORD_HASH_PARAMS = Object.freeze({ N: 16384, r: 8, p: 1 });
+export const PASSWORD_HASH_SALT_BYTES = 16;
+export const PASSWORD_HASH_KEY_BYTES = 32;
 
 export function expandHomePath(path: string): string {
   if (path === "~") return homedir();
@@ -43,11 +47,11 @@ export function apiTokenFilePath(): string {
   return expandHomePath(configured && configured.length > 0 ? configured : "~/.config/healthvault/token");
 }
 
-function parsePasswordHash(raw: string): PasswordHash {
+export function parsePasswordHash(raw: string): PasswordHash {
   const parts = raw.trim().split(":");
   if (parts.length !== 6 || parts[0] !== "scrypt") {
     throw new AuthConfigError(
-      `HEALTHVAULT_PASSWORD_HASH is malformed; expected ${HASH_FORMAT}`,
+      `HEALTHVAULT_PASSWORD_HASH is malformed; expected ${PASSWORD_HASH_FORMAT}`,
     );
   }
 
@@ -65,7 +69,7 @@ function parsePasswordHash(raw: string): PasswordHash {
     p < 1
   ) {
     throw new AuthConfigError(
-      `HEALTHVAULT_PASSWORD_HASH has invalid scrypt parameters; expected ${HASH_FORMAT}`,
+      `HEALTHVAULT_PASSWORD_HASH has invalid scrypt parameters; expected ${PASSWORD_HASH_FORMAT}`,
     );
   }
 
@@ -111,7 +115,7 @@ function loadAuthConfig(): AuthConfig {
   const rawHash = process.env.HEALTHVAULT_PASSWORD_HASH?.trim();
   if (!rawHash) {
     throw new AuthConfigError(
-      `HEALTHVAULT_PASSWORD_HASH is required; expected ${HASH_FORMAT}`,
+      `HEALTHVAULT_PASSWORD_HASH is required; expected ${PASSWORD_HASH_FORMAT}`,
     );
   }
   const passwordHash = parsePasswordHash(rawHash);
