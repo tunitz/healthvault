@@ -1,20 +1,20 @@
 /**
  * Set or verify the HealthVault UI password.
  *
- *   bun scripts/password.ts set    [--file <path>] [--token-file <path>]
- *   bun scripts/password.ts verify [--file <path>] [--token-file <path>]
+ *   bun scripts/password.ts set    [--file <path>]
+ *   bun scripts/password.ts verify [--file <path>]
  *
- * `set` prompts twice with hidden input, writes HEALTHVAULT_PASSWORD_HASH (and a session
- * secret when one is missing) to the env file, and creates the agent token file when neither
- * the env file nor that file provides a token. Secrets are never printed and never accepted
- * as arguments. The env file and token file are always mode 0600.
+ * `set` prompts twice with hidden input and writes HEALTHVAULT_PASSWORD_HASH (and a session
+ * secret when one is missing) to the env file. Secrets are never printed and never accepted
+ * as arguments. The env file is always mode 0600. The agent API takes no token, so no token
+ * file is read or written; `--token-file` is accepted only for compatibility and ignored.
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
-import { apiTokenFilePath, expandHomePath } from "../src/lib/auth-config";
+import { expandHomePath } from "../src/lib/auth-config";
 import { hashPassword, verifyPasswordHash } from "../src/lib/auth";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -24,7 +24,6 @@ const EXTERNAL_AUTH_ENV_FILE = "~/.config/healthvault/auth.env";
 
 const PASSWORD_HASH_KEY = "HEALTHVAULT_PASSWORD_HASH";
 const SESSION_SECRET_KEY = "HEALTHVAULT_SESSION_SECRET";
-const API_TOKEN_KEY = "HEALTHVAULT_API_TOKEN";
 
 const USAGE = `Usage: bun scripts/password.ts <set|verify> [options]
 
@@ -35,14 +34,15 @@ Commands:
 Options:
   --file <path>        env file to read/write (default: ~/.config/healthvault/auth.env when it
                        exists, otherwise ${DEFAULT_ENV_FILE})
-  --token-file <path>  API token file (default: $HEALTHVAULT_API_TOKEN_FILE or ~/.config/healthvault/token)
+  --token-file <path>  ignored (deprecated: the agent API takes no token)
   -h, --help           show this help
 `;
 
 type Options = {
   command: string;
   file: string;
-  tokenFile: string;
+  /** Accepted for backward compatibility; never read or written. */
+  tokenFile?: string;
   help: boolean;
 };
 
@@ -102,7 +102,7 @@ function parseArgs(argv: string[]): Options {
   return {
     command,
     file: file ? resolve(file) : defaultEnvFile(),
-    tokenFile: tokenFile ? resolve(tokenFile) : apiTokenFilePath(),
+    tokenFile,
     help,
   };
 }
@@ -259,18 +259,8 @@ async function runSet(options: Options): Promise<void> {
   const entries = [`${hadPasswordHash ? "updated" : "created"} ${PASSWORD_HASH_KEY}`];
   if (!hadSessionSecret) entries.push(`created ${SESSION_SECRET_KEY}`);
 
-  const tokenStatus = (() => {
-    if (envValue(existing, API_TOKEN_KEY)) {
-      return `${API_TOKEN_KEY} is set in ${options.file}; token file left as is`;
-    }
-    if (existsSync(options.tokenFile)) return `${options.tokenFile} already exists (left as is)`;
-    writePrivateFile(options.tokenFile, generateSecret());
-    return `created ${options.tokenFile} (mode 0600)`;
-  })();
-
   console.log(`wrote ${options.file} (mode 0600)`);
   for (const entry of entries) console.log(`  ${entry}`);
-  console.log(`token: ${tokenStatus}`);
 }
 
 async function runVerify(options: Options): Promise<void> {
@@ -311,6 +301,12 @@ const options = parseArgs(process.argv.slice(2));
 if (options.help) {
   console.log(USAGE);
   process.exit(0);
+}
+if (options.tokenFile !== undefined) {
+  console.error(
+    "warning: --token-file is deprecated and ignored; the agent API takes no token " +
+      "(no token file is read or written).",
+  );
 }
 
 if (options.command === "set") await runSet(options);

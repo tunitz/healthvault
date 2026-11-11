@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -24,9 +23,6 @@ export type AuthConfig = Readonly<{
   sessionSecret: string;
   sessionDays: number;
   cookieSecure: boolean;
-  apiToken: string;
-  /** Where the bearer token came from, for actionable errors. */
-  apiTokenSource: string;
 }>;
 
 const DEFAULT_SESSION_DAYS = 30;
@@ -40,11 +36,6 @@ export function expandHomePath(path: string): string {
   if (path === "~") return homedir();
   if (path.startsWith("~/")) return join(homedir(), path.slice(2));
   return path;
-}
-
-export function apiTokenFilePath(): string {
-  const configured = process.env.HEALTHVAULT_API_TOKEN_FILE?.trim();
-  return expandHomePath(configured && configured.length > 0 ? configured : "~/.config/healthvault/token");
 }
 
 export function parsePasswordHash(raw: string): PasswordHash {
@@ -91,26 +82,6 @@ export function parsePasswordHash(raw: string): PasswordHash {
   });
 }
 
-function readApiToken(): { token: string; source: string } {
-  const fromEnv = process.env.HEALTHVAULT_API_TOKEN?.trim();
-  if (fromEnv) return { token: fromEnv, source: "HEALTHVAULT_API_TOKEN" };
-
-  const path = apiTokenFilePath();
-  try {
-    const token = readFileSync(path, "utf8").trim();
-    if (!token) {
-      throw new Error("file is empty");
-    }
-    return { token, source: path };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new AuthConfigError(
-      `HEALTHVAULT_API_TOKEN is not set and the token file at ${path} cannot be read (${reason}); ` +
-        "set HEALTHVAULT_API_TOKEN or write the token to that file",
-    );
-  }
-}
-
 function loadAuthConfig(): AuthConfig {
   const rawHash = process.env.HEALTHVAULT_PASSWORD_HASH?.trim();
   if (!rawHash) {
@@ -133,15 +104,11 @@ function loadAuthConfig(): AuthConfig {
     throw new AuthConfigError("HEALTHVAULT_SESSION_DAYS must be a positive integer");
   }
 
-  const { token, source } = readApiToken();
-
   return Object.freeze({
     passwordHash,
     sessionSecret,
     sessionDays,
     cookieSecure: process.env.HEALTHVAULT_COOKIE_SECURE === "1",
-    apiToken: token,
-    apiTokenSource: source,
   });
 }
 

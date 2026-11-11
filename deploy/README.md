@@ -59,10 +59,9 @@ systemctl --user enable --now healthvault-backup.timer
 
 The app unit requires the auth credentials and fails fast without them:
 `EnvironmentFile=%h/.config/healthvault/auth.env` (0600: `HEALTHVAULT_PASSWORD_HASH`,
-`HEALTHVAULT_SESSION_SECRET`, optional `HEALTHVAULT_COOKIE_SECURE` / `HEALTHVAULT_SESSION_DAYS`) and
-`HEALTHVAULT_API_TOKEN_FILE=%h/.config/healthvault/token` (0600). `UMask=0077` keeps files created
-by the service owner-only. The backup timer runs `bun run db:backup` daily at 03:30 (persistent
-catch-up) and prunes backups older than 14 days.
+`HEALTHVAULT_SESSION_SECRET`, optional `HEALTHVAULT_COOKIE_SECURE` / `HEALTHVAULT_SESSION_DAYS`).
+`UMask=0077` keeps files created by the service owner-only. The backup timer runs
+`bun run db:backup` daily at 03:30 (persistent catch-up) and prunes backups older than 14 days.
 
 Credentials are managed with the repo script — on this host it targets
 `~/.config/healthvault/auth.env` automatically because that file exists (the target is always
@@ -91,7 +90,7 @@ database 600.
 
 ## TLS
 
-Plain HTTP exposes the password and bearer token in transit on the LAN. For anything beyond a
+Plain HTTP exposes the login password in transit on the LAN. For anything beyond a
 trusted network, terminate TLS in front of the service (see `deploy/Caddyfile.example`) and set
 `HEALTHVAULT_COOKIE_SECURE=1` in `~/.config/healthvault/auth.env` so the session cookie is
 Secure-only.
@@ -99,11 +98,28 @@ Secure-only.
 ## Agent API
 
 `POST /api/agent/<tool>` (JSON in/out) serves the profile, measurements, food log, nutrition,
-supplements and read-only health metrics. It requires `Authorization: Bearer <token>` — the token
-in `~/.config/healthvault/token` (or `HEALTHVAULT_API_TOKEN`); cookies are not accepted on this
-surface. `GET /api/agent` lists the tools (same bearer). The MCP server in `plugins/healthvault/`
-(reads the same token file) is the canonical agent transport; if a tool reports a connection
-error, start the service with `systemctl --user start healthvault`.
+supplements and read-only health metrics. It is **credential-less** by design: no token and no
+cookie, so any host that can reach `127.0.0.1:3040` / the LAN address can use it. Keep the service
+on a trusted LAN, never port-forward it, and put an authenticating proxy in front if it must be
+reachable beyond that. `GET /api/agent` lists the tools. The MCP server in `plugins/healthvault/`
+needs no token either; if a tool reports a connection error, start the service with
+`systemctl --user start healthvault`.
+
+`--token-file` is still accepted by `bun run password:set` and ignored (no token file is read or
+written); old scripts and `HEALTHVAULT_API_TOKEN*` variables keep working but have no effect.
+
+A trusted LAN is not a browser security boundary: with no Host/Origin allowlist, DNS rebinding lets
+a malicious page point its own hostname at the LAN address and drive the credential-less API. Do not
+treat network location as a browser control; front the service with a proxy that enforces a Host or
+Origin allowlist if that matters.
+
+### Upgrade order for the token removal
+
+Rebuild and restart this server **before** updating the MCP client. The previous server build still
+requires `Authorization: Bearer`, and the new client sends no token, so calls return 401 until the
+server restart. Keep the old token file until then if clients run continuously. Rollback has the
+mirror constraint: restart the old server before reverting the client, because the new client cannot
+authenticate to an old server.
 
 ## Verification after deploy
 
@@ -114,10 +130,9 @@ curl -s http://127.0.0.1:3040/api/health                          # {"ok":true}
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:3040/
 # anonymous API -> 401
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/api/type-stats
-# agent: wrong/missing token -> 401, valid bearer -> 200
+# agent: no credentials required -> 200 (trusted-LAN surface)
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3040/api/agent
 curl -s -X POST http://127.0.0.1:3040/api/agent/healthvault_context \
-  -H "authorization: Bearer $(cat ~/.config/healthvault/token)" \
   -H 'content-type: application/json' -d '{}' | head -c 200
 # login round-trip
 curl -s -c /tmp/hv.jar -X POST http://127.0.0.1:3040/api/auth/login \

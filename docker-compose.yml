@@ -10,15 +10,12 @@ services:
       - "3040:3040"
     volumes:
       - ./data:/data
-      # Bearer token for /api/agent/*, mounted read-only (or set HEALTHVAULT_API_TOKEN in .env).
-      - ~/.config/healthvault/token:/run/healthvault/token:ro
     env_file:
       # .env is git-ignored; copy .env.example and fill in the auth variables.
       - .env
     environment:
       - NODE_ENV=production
       - DATABASE_PATH=/data/health.db
-      - HEALTHVAULT_API_TOKEN_FILE=/run/healthvault/token
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3040/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s

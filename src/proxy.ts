@@ -4,8 +4,8 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth";
 
 /**
  * Pages and endpoints reachable without a session. Everything else needs a valid hv_session
- * cookie. /api/agent/* is intentionally NOT here: it is a bearer-only surface and its route
- * handlers call requireToken() themselves.
+ * cookie. /api/agent/* is intentionally NOT here: it is a credential-less machine surface and
+ * is served only on the trusted LAN (never port-forwarded).
  */
 const PUBLIC_EXACT = new Set([
   "/login",
@@ -29,7 +29,7 @@ const STATIC_FILE = /\.(?:png|svg|ico|webp|jpg|jpeg|gif|txt|xml|webmanifest)$/i;
 function isPublic(path: string): boolean {
   if (PUBLIC_EXACT.has(path)) return true;
   if (path.startsWith("/_next/")) return true;
-  // Never let a file extension exempt an API route from session/token auth.
+  // Never let a file extension exempt an API route from session auth.
   if (path.startsWith("/api/")) return false;
   return STATIC_FILE.test(path);
 }
@@ -81,7 +81,7 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") || "/" : pathname;
 
-  // Authenticated by token in the route itself — never demand a cookie here.
+  // Credential-less machine surface — never demand a cookie here.
   if (isAgentPath(path)) {
     return nextWithHeaders(request, requestHeaders, csp);
   }

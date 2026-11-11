@@ -27,6 +27,16 @@ export const AGENT_TOOLS = [
   "uploads_recent",
   "supplement_history",
   "supplement_delete",
+  "recipe_create",
+  "recipe_get",
+  "recipe_log",
+  "recipe_update",
+  "recipe_delete",
+  "food_template_list",
+  "food_template_apply",
+  "meal_get",
+  "food_history_preview",
+  "food_history_refresh",
 ] as const;
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];

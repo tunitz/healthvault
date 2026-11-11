@@ -1,6 +1,6 @@
 # HealthVault TLS reverse proxy example.
 #
-# Plain HTTP on the LAN exposes the login password and bearer token in transit;
+# Plain HTTP on the LAN exposes the login password in transit;
 # put Caddy (or any TLS terminator) in front for anything beyond a fully trusted
 # network. With TLS in front, set HEALTHVAULT_COOKIE_SECURE=1 in
 # ~/.config/healthvault/auth.env so the session cookie is Secure-only.

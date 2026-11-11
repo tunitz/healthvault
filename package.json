@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "bun scripts/migrate-db.ts",
     "db:backup": "bun scripts/backup-db.ts",
     "password:set": "bun scripts/password.ts set",
     "password:verify": "bun scripts/password.ts verify"

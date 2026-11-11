@@ -10,9 +10,13 @@ import type {
   CopyDayInput,
   FoodAddInput,
   FoodDeleteInput,
+  FoodHistoryPreviewInput,
+  FoodHistoryRefreshInput,
   FoodSearchInput,
+  FoodTemplateApplyInput,
   HealthVaultClient,
   MealDeleteInput,
+  MealGetInput,
   MealLogInput,
   MealUpdateInput,
   MeasurementAddInput,
@@ -23,6 +27,11 @@ import type {
   NutritionSummaryInput,
   NutritionTargetSetInput,
   ProfileUpdateInput,
+  RecipeCreateInput,
+  RecipeDeleteInput,
+  RecipeGetInput,
+  RecipeLogInput,
+  RecipeUpdateInput,
   RecordsRecentInput,
   SupplementCreateInput,
   SupplementDeleteInput,
@@ -80,6 +89,68 @@ const MACROS_PER_100G_SCHEMA = {
   additionalProperties: false,
 };
 
+const MEASURE_SCHEMA = {
+  type: "object",
+  properties: {
+    name: { type: "string", maxLength: 40 },
+    count: { type: "number", minimum: 0.01 },
+  },
+  required: ["name", "count"],
+  additionalProperties: false,
+};
+
+const PROVENANCE_PROPS = {
+  gramsAs: { type: "string", enum: ["raw", "cooked"] },
+  state: { type: "string", enum: ["raw", "cooked", "dry", "rehydrated", "none"] },
+  weightSource: { type: "string", enum: ["weighed", "counted", "guessed"] },
+  macroSource: { type: "string", enum: ["label", "usda", "recipe", "estimated"] },
+};
+
+const INGREDIENT_OVERRIDE_SCHEMA = {
+  type: "object",
+  properties: {
+    ingredientId: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Recipe ingredient id from recipe_get. Preferred when the same food appears twice.",
+    },
+    foodId: { type: "integer", minimum: 1 },
+    grams: {
+      type: "number",
+      minimum: 0.1,
+      description:
+        "Amount in the units named by amountBasis: batch grams or one-serving grams. Use grams or measure, never both.",
+    },
+    measure: MEASURE_SCHEMA,
+    gramsAs: { type: "string", enum: ["raw", "cooked"] },
+  },
+  description: "At least one of ingredientId or foodId is required.",
+  additionalProperties: false,
+};
+
+const HISTORY_SCOPE_PROPS = {
+  foodIds: {
+    type: "array",
+    maxItems: 200,
+    items: { type: "integer", minimum: 1 },
+    description: "Saved food ids to correct. At least one of foodIds or entryIds is required.",
+  },
+  entryIds: {
+    type: "array",
+    maxItems: 500,
+    items: { type: "integer", minimum: 1 },
+    description: "Logged entry ids to correct, including all their ingredient snapshots.",
+  },
+  fromDay: { ...DAY_SCHEMA, description: "Optional lower bound (YYYY-MM-DD), inclusive." },
+  toDay: { ...DAY_SCHEMA, description: "Optional upper bound (YYYY-MM-DD), inclusive." },
+};
+
+/**
+ * The first three variants are the original shapes, with their required fields untouched; the
+ * new optional provenance fields are additive. The last three accept a household measure instead
+ * of grams, which the server resolves from the food (or the shared measure defaults).
+ */
 const MEAL_ENTRY_SCHEMA = {
   oneOf: [
     {
@@ -89,6 +160,7 @@ const MEAL_ENTRY_SCHEMA = {
         grams: { type: "number", minimum: 0.1 },
         note: { type: "string", maxLength: 1000 },
         estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
       },
       required: ["foodId", "grams"],
       additionalProperties: false,
@@ -101,6 +173,7 @@ const MEAL_ENTRY_SCHEMA = {
         per100g: MACROS_PER_100G_SCHEMA,
         note: { type: "string", maxLength: 1000 },
         estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
       },
       required: ["name", "grams", "per100g"],
       additionalProperties: false,
@@ -118,8 +191,52 @@ const MEAL_ENTRY_SCHEMA = {
         sodiumMg: { type: "number", minimum: 0 },
         note: { type: "string", maxLength: 1000 },
         estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
       },
       required: ["name", "grams", "kcal"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        foodId: { type: "integer", minimum: 1 },
+        measure: MEASURE_SCHEMA,
+        note: { type: "string", maxLength: 1000 },
+        estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
+      },
+      required: ["foodId", "measure"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        name: { type: "string", maxLength: 200 },
+        measure: MEASURE_SCHEMA,
+        per100g: MACROS_PER_100G_SCHEMA,
+        note: { type: "string", maxLength: 1000 },
+        estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
+      },
+      required: ["name", "measure", "per100g"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        name: { type: "string", maxLength: 200 },
+        measure: MEASURE_SCHEMA,
+        kcal: { type: "number", minimum: 0 },
+        proteinG: { type: "number", minimum: 0 },
+        carbsG: { type: "number", minimum: 0 },
+        fatG: { type: "number", minimum: 0 },
+        fibreG: { type: "number", minimum: 0 },
+        sodiumMg: { type: "number", minimum: 0 },
+        note: { type: "string", maxLength: 1000 },
+        estimated: { type: "boolean" },
+        ...PROVENANCE_PROPS,
+      },
+      required: ["name", "measure", "kcal"],
       additionalProperties: false,
     },
   ],
@@ -277,7 +394,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<FoodAddInput>({
       name: "healthvault_food_add",
       description:
-        "Create or update a reusable food with nutrition per 100 g. Never invent nutrition values; ask the user when unsure. Inputs: name, optional brand, barcode, servingGrams, source, extra, and per100g { kcal (required), proteinG, carbsG, fatG, fibreG, sodiumMg }.",
+        "Create or update a reusable food with nutrition per 100 g. Never invent nutrition values; ask the user when unsure. Inputs: name, optional brand, barcode, servingGrams, state (raw|cooked|dry|rehydrated|none — the basis of the per-100 g values), yieldFactor (cooked g per raw g, or per dry g), measures (grams per household unit, e.g. {\"tbsp\":6}), source, sourceUrl, sourceDate (YYYY-MM-DD), extra, and per100g { kcal (required), proteinG, carbsG, fatG, fibreG, sodiumMg }. This is a manual entry surface: it does not fetch or infer values.",
       input: {
         type: "object",
         properties: {
@@ -286,8 +403,16 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
           barcode: { type: "string", maxLength: 64 },
           servingGrams: { type: "number", minimum: 1, maximum: 10000 },
           per100g: MACROS_PER_100G_SCHEMA,
+          state: { type: "string", enum: ["raw", "cooked", "dry", "rehydrated", "none"] },
+          yieldFactor: { type: "number", minimum: 0.01, maximum: 10 },
+          measures: {
+            type: "object",
+            additionalProperties: { type: "number", minimum: 0.01 },
+          },
           extra: {},
           source: { type: "string" },
+          sourceUrl: { type: "string", maxLength: 500 },
+          sourceDate: { type: "string", pattern: DAY_PATTERN },
         },
         required: ["name", "per100g"],
         additionalProperties: false,
@@ -298,12 +423,13 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<MealLogInput>({
       name: "healthvault_meal_log",
       description:
-        "Log a whole meal in one call. Each entry may reference a foodId, give a name with per100g values, or give a name with absolute macros for the portion. Inputs: meal (breakfast|lunch|dinner|snack), entries (non-empty, at most 100), optional day (YYYY-MM-DD). day defaults to today in the profile timezone. Mark estimated: true when nutrition values are approximate.",
+        "Log a whole meal in one call. Each entry may reference a foodId, give a name with per100g values, or give a name with absolute macros for the portion. A household measure ({ name, count }) may replace grams. Inputs: meal (breakfast|lunch|dinner|snack), entries (non-empty, at most 100), optional day (YYYY-MM-DD) and eatenAt (ISO timestamp or epoch ms; a timestamp without an offset is read in the profile timezone, and day defaults to the eatenAt day, then today). For a saved food, state must match the food's own basis — use gramsAs to say what you weighed; an inline entry may declare its state. Mark estimated: true when nutrition values are approximate; weightSource/macroSource state provenance precisely.",
       input: {
         type: "object",
         properties: {
           day: DAY_SCHEMA,
           meal: MEAL_SCHEMA,
+          eatenAt: { type: ["string", "number"] },
           entries: {
             type: "array",
             minItems: 1,
@@ -320,7 +446,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<MealUpdateInput>({
       name: "healthvault_meal_update",
       description:
-        "Change an already logged meal entry, so this edits logged data. Inputs: id (required), plus any of meal, name, grams, kcal, proteinG, carbsG, fatG, fibreG, sodiumMg, estimated, note. Changing only grams scales the existing macros proportionally.",
+        "Change an already logged meal entry, so this edits logged data. Inputs: id (required), plus any of meal, name, grams, kcal, proteinG, carbsG, fatG, fibreG, sodiumMg, estimated, note, day, eatenAt (ISO timestamp or epoch ms; no offset = profile timezone), gramsAs (raw|cooked), weightSource, macroSource. Recipe-sourced entries also accept servingNo and servingFraction; a grams or servingFraction edit rescales from the recipe's stored per-serving snapshot. Changing only grams on a food entry recomputes the macros from the food rather than compounding.",
       input: {
         type: "object",
         properties: {
@@ -336,6 +462,14 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
           sodiumMg: { type: "number", minimum: 0 },
           estimated: { type: "boolean" },
           note: { type: ["string", "null"], maxLength: 1000 },
+          day: DAY_SCHEMA,
+          eatenAt: { type: ["string", "number"] },
+          servingNo: { type: "integer", minimum: 1 },
+          servingFraction: { type: "number", minimum: 0.01, maximum: 100 },
+          gramsAs: { type: "string", enum: ["raw", "cooked"] },
+          state: { type: "string", enum: ["raw", "cooked", "dry", "rehydrated", "none"] },
+          weightSource: { type: "string", enum: ["weighed", "counted", "guessed"] },
+          macroSource: { type: "string", enum: ["label", "usda", "recipe", "estimated"] },
         },
         required: ["id"],
         additionalProperties: false,
@@ -664,6 +798,213 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
       },
       destructive: true,
       run: (input, signal) => client.supplementDelete(input, signal),
+    }),
+
+    defineTool<RecipeCreateInput>({
+      name: "healthvault_recipe_create",
+      description:
+        "Create a reusable composite dish. Totals are computed from the ingredients (per-100 g × grams), never stored twice; per serving = total / servings. Inputs: name, servings (default 2), note, ingredients (non-empty array of { foodId?, name?, grams, measure? }). Each ingredient needs grams or a household measure; foodId supplies its nutrition, while a name-only ingredient keeps its weight but is exposed as unresolved, marks the recipe incomplete, and makes logged servings estimated. Returns the recipe with total, perServing, complete and unresolvedIngredients.",
+      input: {
+        type: "object",
+        properties: {
+          name: { type: "string", maxLength: 200 },
+          servings: { type: "integer", minimum: 1, maximum: 100 },
+          note: { type: "string", maxLength: 2000 },
+          ingredients: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: "object",
+              properties: {
+                foodId: { type: "integer", minimum: 1 },
+                name: { type: "string", maxLength: 200 },
+                grams: { type: "number", minimum: 0.1 },
+                measure: MEASURE_SCHEMA,
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["name", "ingredients"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.recipeCreate(input, signal),
+    }),
+
+    defineTool<RecipeGetInput>({
+      name: "healthvault_recipe_get",
+      description:
+        "Read one recipe with its resolved ingredients, total and per-serving macros, remaining servings and the servings already logged. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.recipeGet(input, signal),
+    }),
+
+    defineTool<RecipeLogInput>({
+      name: "healthvault_recipe_log",
+      description:
+        "Log one serving of a recipe as an immutable snapshot with one row per ingredient. Inputs: recipeId, meal, optional day (YYYY-MM-DD), servingNo (defaults to the next unlogged serving), servingFraction (default 1), eatenAt (ISO timestamp or epoch ms; no offset = profile timezone), note, and optional ingredientOverrides (this meal only; the recipe definition is not edited) plus amountBasis. amountBasis is required with overrides: 'batch' means override grams are for the whole recipe (divided by servings), 'serving' means they are already one serving. The per-serving values and every ingredient (food id, grams, measure, state, source, macros) are captured on the row, so later recipe edits or archiving never rewrite history. If the recipe has name-only ingredients the entry is saved with estimated macros and reports incomplete/unresolvedIngredients; a recipe with no food-resolved ingredients is rejected. This writes logged data.",
+      input: {
+        type: "object",
+        properties: {
+          recipeId: { type: "integer", minimum: 1 },
+          day: DAY_SCHEMA,
+          meal: MEAL_SCHEMA,
+          servingNo: { type: "integer", minimum: 1 },
+          servingFraction: { type: "number", minimum: 0.01, maximum: 100 },
+          eatenAt: { type: ["string", "number"] },
+          name: { type: "string", maxLength: 200 },
+          note: { type: "string", maxLength: 1000 },
+          weightSource: { type: "string", enum: ["weighed", "counted", "guessed"] },
+          ingredientOverrides: {
+            type: "array",
+            maxItems: 100,
+            items: INGREDIENT_OVERRIDE_SCHEMA,
+          },
+          amountBasis: {
+            type: "string",
+            enum: ["batch", "serving"],
+            description:
+              "Required with ingredientOverrides. 'batch' = grams for the whole recipe; 'serving' = grams for one serving.",
+          },
+        },
+        required: ["recipeId", "meal"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.recipeLog(input, signal),
+    }),
+
+    defineTool<RecipeUpdateInput>({
+      name: "healthvault_recipe_update",
+      description:
+        "Change a recipe; only the fields supplied change. Replacing ingredients never rewrites already logged entries. Inputs: id (required), name, servings, note, ingredients (replaces the whole list; each needs grams or measure, with foodId for nutrition, or name-only to store an unresolved ingredient). This edits stored recipe data.",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          name: { type: "string", maxLength: 200 },
+          servings: { type: "integer", minimum: 1, maximum: 100 },
+          note: { type: "string", maxLength: 2000 },
+          ingredients: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: "object",
+              properties: {
+                foodId: { type: "integer", minimum: 1 },
+                name: { type: "string", maxLength: 200 },
+                grams: { type: "number", minimum: 0.1 },
+                measure: MEASURE_SCHEMA,
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.recipeUpdate(input, signal),
+    }),
+
+    defineTool<RecipeDeleteInput>({
+      name: "healthvault_recipe_delete",
+      description:
+        "Remove a recipe. A recipe still referenced by logged entries or by historical child snapshots (for example a copy_day copy whose parent recipeId was cleared) is archived instead of destroyed (result: deleted false, archived true, with the reason, loggedEntries and snapshotIngredients): it leaves the active surface, but the logged snapshots stay readable and rescalable. An unreferenced recipe is deleted with its own ingredient rows. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      destructive: true,
+      run: (input, signal) => client.recipeDelete(input, signal),
+    }),
+
+    defineTool<Record<string, never>>({
+      name: "healthvault_food_template_list",
+      description:
+        "Read the explicit food templates distilled from the real log: household grams (honey 1 kutsarita = 7 g, NESCAFÉ Gold 1 tbsp = 6 g, jumbo egg 1 piece = 60 g, KFC fry 1 strip = 2 g, whey 1 scoop = 32.4 g) and raw/dry yield factors (chicken breast 0.75, thigh/ground beef 0.70, rice 2.3, pulses 2.4, pasta 1.8, oats 2.3). Read-only; nothing is applied by name inference. No inputs.",
+      input: NO_INPUT,
+      readOnly: true,
+      run: (_input, signal) => client.foodTemplateList(signal),
+    }),
+
+    defineTool<FoodTemplateApplyInput>({
+      name: "healthvault_food_template_apply",
+      description:
+        "Apply one named template to a specific saved food id: its household-measure grams and/or state + yield factor. This edits the food definition (never its macros or logged history). Existing per-unit overrides and a custom state/yield are kept unless overwrite is true. Use food_template_list for the exact template names; matching is exact, never by food name. Inputs: id (required), template (required slug), overwrite (default false).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          template: { type: "string", minLength: 1, maxLength: 80 },
+          overwrite: { type: "boolean" },
+        },
+        required: ["id", "template"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.foodTemplateApply(input, signal),
+    }),
+
+    defineTool<MealGetInput>({
+      name: "healthvault_meal_get",
+      description:
+        "Read one logged meal entry with its full historical snapshot: the aggregate row plus every ingredient (food id, grams, household measure, state, per-100 g values, macros, source metadata) captured at log time. `ingredientSnapshotComplete` is null for a plain food entry, true when the ingredient snapshot exists, and false for a legacy aggregate-only recipe row whose ingredients were never recorded. Inputs: id (required).",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.mealGet(input, signal),
+    }),
+
+    defineTool<FoodHistoryPreviewInput>({
+      name: "healthvault_food_history_preview",
+      description:
+        "Preview corrections to already logged snapshots after a saved food's nutrition changed. Read-only: nothing is written. Scope with foodIds and/or entryIds (at least one), optionally fromDay/toDay. Returns each affected entry/ingredient with previous and proposed macros, plus a previewHash. Rows are skipped (never guessed) when the food is missing, the stored basis is unknown, or the food's state basis changed. Legacy aggregate-only recipe rows are not refreshed and are labelled incomplete by meal_get/nutrition_day.",
+      input: {
+        type: "object",
+        properties: HISTORY_SCOPE_PROPS,
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.foodHistoryPreview(input, signal),
+    }),
+
+    defineTool<FoodHistoryRefreshInput>({
+      name: "healthvault_food_history_refresh",
+      description:
+        "Apply exactly the corrections a prior food_history_preview showed. Requires the same scope plus its previewHash; a stale or unseen preview is rejected with 409, and nothing outside the stated scope changes. Each changed row keeps a revision with its previous and new values. This edits logged data, so run the preview and confirm with the user first.",
+      input: {
+        type: "object",
+        properties: {
+          ...HISTORY_SCOPE_PROPS,
+          previewHash: {
+            type: "string",
+            minLength: 1,
+            maxLength: 128,
+            description: "previewHash returned by food_history_preview for the same scope.",
+          },
+        },
+        required: ["previewHash"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.foodHistoryRefresh(input, signal),
     }),
   ];
 }

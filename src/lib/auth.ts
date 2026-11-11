@@ -56,7 +56,7 @@ export function hashPassword(password: string): string {
 
 /**
  * Verify a password against a raw hash string without loading auth config, so it
- * works when the session secret or API token are absent (e.g. the password CLI).
+ * works when the session secret is absent (e.g. the password CLI).
  * A malformed hash simply does not match.
  */
 export function verifyPasswordHash(password: string, rawHash: string): boolean {
@@ -114,42 +114,6 @@ export function expiredSessionCookieOptions() {
     secure: cookieSecure,
     maxAge: 0,
   };
-}
-
-export function verifyBearerToken(token: string | null | undefined): boolean {
-  if (!token) return false;
-  const expected = Buffer.from(getAuthConfig().apiToken);
-  const actual = Buffer.from(token);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
-/**
- * Agent/API-token guard. Bearer only — cookie auth is deliberately not accepted for
- * /api/agent/*, which keeps the agent surface free of CSRF.
- */
-export function requireToken(request: Request): Response | null {
-  const header = request.headers.get("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : null;
-
-  if (!header) {
-    return Response.json(
-      {
-        error:
-          "missing bearer token; MCP clients read " + getAuthConfig().apiTokenSource,
-      },
-      { status: 401 },
-    );
-  }
-  if (!token || !verifyBearerToken(token)) {
-    return Response.json(
-      {
-        error:
-          "invalid bearer token; MCP clients read " + getAuthConfig().apiTokenSource,
-      },
-      { status: 401 },
-    );
-  }
-  return null;
 }
 
 /** For server actions and routes that want to throw on missing auth. */

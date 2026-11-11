@@ -4,8 +4,8 @@ Single-user web app: upload an Apple Health `Export.zip`, it is parsed into SQLi
 browsed in a Next.js dashboard (shadcn components + recharts).
 
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
-**shadcn** (radix + nova preset). Single-user login (password + session cookie), bearer-token agent
-API, no cloud, one local database file.
+**shadcn** (radix + nova preset). Single-user login (password + session cookie), credential-less
+agent API on the trusted LAN, no cloud, one local database file.
 
 ## What it tracks
 
@@ -28,25 +28,31 @@ day's rows from rolling windows. Timestamps in the UI are local wall-clock, not 
 
 ## Authentication
 
-Single-user, two credentials, no user table. There is **no auth-off mode**: the server refuses to
-boot without valid credentials.
+Single-user login for the web UI, no user table. There is **no auth-off mode**: the server refuses
+to boot without valid credentials.
 
 | Credential | Used by | Stored in |
 |---|---|---|
 | Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in the credentials env file (0600) |
-| Bearer token (`Authorization: Bearer`) | agents / MCP clients on `/api/agent/*` | token file, default `~/.config/healthvault/token` (0600); `HEALTHVAULT_API_TOKEN` env wins (Docker/remote) |
 
 The credentials env file is the project-root `.env` (git-ignored, mode 0600, loaded automatically
 by Next.js) — `bun run password:set` creates and maintains it for you.
 
-`/api/agent/*` accepts **only** the bearer token (no cookies), which removes CSRF from the agent
-surface. Everything else requires the session cookie: unauthenticated pages redirect to `/login`,
-unauthenticated API calls get 401. Login is throttled (5 failures / 15 min → 429). `GET /api/health`
-is public and returns `{"ok":true}` only.
+Everything except `/api/health` and `/api/agent/*` requires the session cookie: unauthenticated
+pages redirect to `/login`, unauthenticated API calls get 401. Login is throttled (5 failures /
+15 min → 429). `GET /api/health` is public and returns `{"ok":true}` only.
+
+`/api/agent/*` is deliberately **credential-less**: local agents and MCP clients call it with no
+token and no cookie. It is reachable by any device that can open `0.0.0.0:3040`, so it is a
+trusted-LAN surface by construction — never port-forward or expose it to the internet. If remote
+agent access is needed, put an authenticating TLS proxy in front of the app.
+
+The token is gone, but old operator scripts keep working: `password:set` still accepts
+`--token-file <path>` and ignores it (no token file is read or written), and
+`HEALTHVAULT_API_TOKEN` / `HEALTHVAULT_API_TOKEN_FILE` are ignored if still present.
 
 Environment variables: `DATABASE_PATH`, `HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET`,
-`HEALTHVAULT_API_TOKEN`, `HEALTHVAULT_API_TOKEN_FILE`, `HEALTHVAULT_COOKIE_SECURE` (set `1` behind
-TLS), `HEALTHVAULT_SESSION_DAYS`.
+`HEALTHVAULT_COOKIE_SECURE` (set `1` behind TLS), `HEALTHVAULT_SESSION_DAYS`.
 
 **Set or change the password:**
 
@@ -56,18 +62,32 @@ bun run password:verify    # check a password against the stored hash
 ```
 
 `password:set` writes the scrypt hash to the credentials env file and, on a fresh setup, also
-generates the `HEALTHVAULT_SESSION_SECRET` and the agent token file. By default it targets
+generates the `HEALTHVAULT_SESSION_SECRET`. By default it targets
 `~/.config/healthvault/auth.env` when that file already exists (hosts that inject credentials from
 an external file), otherwise the project `.env`; pass `--file <path>` to choose explicitly — the
 chosen target is always printed. Restart the app after changing credentials. Existing sessions stay
-valid until they expire; regenerate `HEALTHVAULT_SESSION_SECRET` to invalidate them all. Rotating
-the bearer token: overwrite the token file, restart the app, and restart MCP clients.
+valid until they expire; regenerate `HEALTHVAULT_SESSION_SECRET` to invalidate them all.
 
 ## Agent API and MCP
 
 `POST /api/agent/<tool>` takes a JSON object and returns `{ ok: true, tool, result }`, or
-`{ ok: false, tool, error }` with 400/401/404/409/500. `GET /api/agent` lists the tools. Both
-require `Authorization: Bearer <token>` (see above); do not expose port 3040 to the internet.
+`{ ok: false, tool, error }` with 400/404/409/500. `GET /api/agent` lists the tools. There is no
+token or cookie on this surface; keep the service on a trusted LAN and do not expose port 3040 to
+the internet.
+
+A trusted LAN is a network assumption, **not a browser security boundary**. With no Host/Origin
+allowlist, a malicious page can use DNS rebinding to make its own hostname resolve to this LAN
+address and drive the credential-less API from the browser. Keeping the service on the LAN does not
+stop that; an allowlist in a fronting proxy (or loopback-only binding) is required and is not
+implemented here.
+
+### Upgrading from a token build
+
+Install the new server build first: rebuild and restart the app, **then** update and restart the MCP
+client. The old app build still requires a bearer token and the new client sends none, so tool calls
+return 401 until the server side is the new build. If you run MCP clients continuously, keep the old
+token file in place until the server restart. The versions are not compatible in either direction,
+so on rollback restart the old server before reverting the client.
 
 The canonical agent transport is the **MCP server** in `plugins/healthvault/` — one stdio server
 every harness can run (OpenCode, Claude Code, Claude Desktop, Cursor, …). Install and configure it
@@ -78,16 +98,21 @@ bun install -g ./plugins/healthvault    # from the project directory
 ```
 
 See `plugins/healthvault/README.md` for per-harness config snippets. Clients with no MCP support can
-call `POST /api/agent/<tool>` directly with the bearer token.
+call `POST /api/agent/<tool>` directly, e.g. `curl http://127.0.0.1:3040/api/agent/healthvault_context
+-H 'content-type: application/json' -d '{}'`.
 
 **Reads** — `healthvault_context`, `profile_get`, `measurement_history`, `food_search`,
 `nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`, `metrics_series`,
-`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`.
+`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`, `recipe_get`,
+`food_template_list`, `meal_get`, `food_history_preview`.
 
 **Writes** — `profile_update`, `measurement_add`, `food_add`, `meal_log`, `meal_update`,
-`nutrition_target_set`, `supplement_create`, `supplement_update`, `supplement_log`, `copy_day`.
+`nutrition_target_set`, `supplement_create`, `supplement_update`, `supplement_log`, `copy_day`,
+`recipe_create`, `recipe_log`, `recipe_update`, `food_template_apply`,
+`food_history_refresh`.
 
-**Deletes** — `measurement_delete`, `food_delete`, `meal_delete`, `supplement_delete`.
+**Deletes** — `measurement_delete`, `food_delete`, `meal_delete`, `supplement_delete`,
+`recipe_delete`.
 
 The surface covers every write the UI exposes, including the delete paths, plus the read-only
 aggregation behind `/api/type-stats` (`record_types`). `/api/upload` is deliberately **not**
@@ -110,6 +135,103 @@ and percent; never more than two decimals.
 `healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
 the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data
 freshness (last import, last record day).
+
+### Food defaults (opt-in templates)
+
+Household-measure grams and raw/dry yield factors recorded from the real log live in a fixed
+template catalogue — honey, NESCAFÉ Gold, jumbo egg, KFC fry strip, whey, and the
+chicken/beef/rice/pulse/pasta/oats yields. Nothing is inferred from a food's name, and **no saved
+food is changed until you apply a template explicitly**. Templates never carry nutrition values
+themselves.
+
+```bash
+# 1. List the catalogue and its exact slugs.
+curl -sS http://127.0.0.1:3040/api/agent/food_template_list \
+  -H 'content-type: application/json' -d '{}'
+
+# 2. Apply one template to one saved food id. Macros are untouched.
+curl -sS http://127.0.0.1:3040/api/agent/food_template_apply \
+  -H 'content-type: application/json' \
+  -d '{"id": 12, "template": "honey"}'
+```
+
+Existing per-unit overrides and a custom state/yield factor are kept; pass `{"overwrite": true}`
+to replace them. A template that changes the per-100 g basis (for example `white-rice-dry`
+switching a food from `raw` to `dry`) refuses without `overwrite: true`, so stored nutrition is
+never silently relabelled. Applied values stay editable through `food_add`.
+
+The `0003` migration also fills these values into legacy rows whose **name and brand match
+exactly** — Honey (no brand); NESCAFÉ Gold, instant coffee (dry) (Nescafé); Egg, whole, raw
+(jumbo 60g) (no brand); KFC Crispy Fries (KFC Philippines); Whey Protein, ACTIVE, Chocolate
+(ACTIVE); Chicken breast, skinless, raw (no brand) — but only while the added columns still hold
+their defaults. It never creates a food, never edits logged meals, and never overwrites a measure
+or yield factor that was already edited.
+
+Recipe ingredients may omit `foodId`: the ingredient keeps its grams/measure but contributes no
+invented nutrition, `recipe_get` reports it as unresolved and the recipe as incomplete, and any
+serving logged from an incomplete recipe is stored with `macroSource: "estimated"`. A recipe with
+no food-resolved ingredients at all is refused by `recipe_log` instead of logging a zero meal.
+
+### Full ingredient snapshots, per-meal overrides and recipe archival (`0004`)
+
+`0004_ingredient_snapshots_history` adds `food_log_ingredients`, `food_log_revisions`,
+`food_revisions`, `foods.source_url` / `source_date`, `food_log.basis_state` /
+`basis_yield_factor`, and `recipes.archived_at_ms` / `archived_reason`. It is additive: no existing
+row is rewritten and no historical ingredient is invented.
+
+- **Every logged recipe serving now writes one child row per ingredient** — food id, name, grams in
+  the portion, per-serving grams, household measure, weighed state, the food's basis state and yield
+  factor, per-100 g values, portion macros, resolved flag, provenance and source URL/date. The exact
+  `0004` SQL and the cross-stack contract are in `docs/ingredient-snapshots-handoff.md`.
+- **Per-meal overrides** (`recipe_log.ingredientOverrides`) change quantities for one meal without
+  editing the recipe. `amountBasis` is required with overrides: `"batch"` means the override grams
+  are for the whole recipe (divided by servings), `"serving"` means they are already one serving.
+  The snapshot stores the same basis, so a measure is never re-interpreted later. Identify an
+  ingredient by `ingredientId` (from `recipe_get`) or by `foodId` when it appears once. The
+  ingredient library is the existing `foods` table: `food_search` finds a saved food and its id,
+  and `recipe_create`/`recipe_update` accept that `foodId` directly.
+- **Editing a recipe no longer rewrites history.** Historical child rows keep their own copy and
+  their original `recipe_ingredient_id` (a plain historical integer, not a live FK). `meal_update`
+  rescales from the stored per-serving snapshot and rescales each child in the same transaction.
+- **`copy_day` copies the whole snapshot**, including child rows, `serving_fraction` and
+  `recipe_serving_json`. The copy has no live `recipe_id`/`serving_no` (so it cannot corrupt the
+  remaining-servings count) but remains readable and rescalable.
+- **`meal_delete` deletes its child ingredient and revision rows** in the same transaction, and
+  `food_delete` returns 409 when a logged recipe ingredient still references the food.
+- **Recipe deletion is non-destructive.** A recipe with logged history is archived (`deleted:
+  false, archived: true`, with a reason and `loggedEntries` count): it leaves the active surface,
+  cannot be logged or edited again, but its detail and old logs stay readable and rescalable. It is
+  also archived when only copied child snapshots still name it after their parent `recipe_id` was
+  cleared. A recipe with no logged or historical reference deletes together with its own ingredient
+  rows, so a populated recipe is never undeletable.
+- **A recipe entry's macros are derived from its children.** `meal_update` rejects an explicit
+  macro edit with 409 while child snapshots exist, and rejects `servingFraction`/`servingNo`
+  together with macros, so the parent and children cannot desync. Use `servingFraction`, `grams`,
+  or the explicit history-refresh path instead.
+- **Past meals are never silently corrected.** After a food's nutrition changes, existing snapshots
+  keep their values. `food_history_preview` (read-only) lists the exact before/after rows and a
+  `previewHash`; `food_history_refresh` applies only those rows, requires the hash, and writes a
+  `food_log_revisions` row with the previous and new JSON. Scope it with `foodIds` and/or `entryIds`
+  (optionally `fromDay`/`toDay`); a global rewrite is rejected, and a scope over 500 snapshots fails
+  before writing anything instead of partially correcting. Rows are skipped with a reason when the
+  food is missing, the stored basis is unknown, the food's basis state changed, or its yield factor
+  changed while a weighed-state conversion was in play (`yield_changed`). An `estimated` or
+  manual snapshot is never relabelled `label` and its estimated flag is never forced off. A legacy
+  aggregate-only recipe row in an explicitly scoped `entryIds` list is surfaced as skipped
+  (`aggregate_snapshot_without_ingredients`), not silently omitted. Such a row has no recorded
+  per-serving arithmetic, so `meal_update` refuses a `servingFraction`/`grams` rescale with 409;
+  explicit grams/macros edits still work.
+- `meal_get` verifies the recorded child count: a non-empty but truncated ingredient list is
+  reported as `ingredientSnapshotComplete: false`.
+- `food_add` accepts `sourceUrl` and `sourceDate` (YYYY-MM-DD) alongside `source`; values are
+  manual, never fetched. Every food-definition change writes a `food_revisions` row.
+
+### Recipe deletion and legacy rows
+
+`recipe_delete` archives a recipe that has logged history instead of deleting it (see above).
+Because the write surface requires a non-empty ingredient list, a recipe with no ingredient rows
+(legacy/manual data only) deletes normally. The older "409 for every reference" rule is gone; the
+old aggregate-only `food_log` rows themselves are untouched.
 
 ## Upgrading from an earlier import
 
@@ -207,9 +329,11 @@ starting it again.
 
 ## Security posture
 
-The service listens on `0.0.0.0:3040` so the phone/PWA can reach it. Every route is protected:
-the UI by the session cookie, `/api/agent/*` by the bearer token. Over plain HTTP both credentials
-cross the LAN in clear text — keep the service on a trusted network, or put TLS in front
+The service listens on `0.0.0.0:3040` so the phone/PWA can reach it. The UI is protected by the
+session cookie; `/api/agent/*` is intentionally credential-less for local agents, so any device on
+the LAN can read and write health data through it, and any browser on the LAN is a potential path to
+it via DNS rebinding (see above). Over plain HTTP the login password crosses the LAN in clear text —
+keep the service on a trusted network, or put an authenticating TLS proxy in front
 (`deploy/Caddyfile.example`, then set `HEALTHVAULT_COOKIE_SECURE=1`). Do not port-forward it.
 Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer`, COOP/CORP `same-origin` and a report-only CSP; the service worker
@@ -217,9 +341,10 @@ never caches `/login`, `/api/auth/*` or any `/api/*`. Logout clears the cookie, 
 storage (`Clear-Site-Data`). Known tradeoff: pages cached by the PWA while authenticated remain
 readable offline on that device until logout clears them.
 
-There are **no committed tests**: the test suites were removed deliberately (single-user local
-tool). Verification is `bun run typecheck && bun run lint && bun run build` plus the live checks in
-`deploy/README.md`. Do not read the missing tests as a safety net that still exists.
+Tests live in `src/test/` (`bun test`) and run against throwaway databases under `/tmp/opencode`;
+they cover the services and the auth surface. They are a development aid, not a deployment safety
+net: verification is still `bun run typecheck && bun run lint && bun run build` plus the live checks
+in `deploy/README.md`.
 
 ## Installation
 
@@ -231,8 +356,7 @@ git clone https://github.com/tunitz/healthvault && cd healthvault
 bun install
 
 # 2. credentials (once): prompts for the login password with hidden input,
-#    writes .env (0600) with the scrypt hash + a generated session secret,
-#    and creates the agent token file (~/.config/healthvault/token, 0600).
+#    writes .env (0600) with the scrypt hash + a generated session secret.
 bun run password:set
 
 # 3. build + run (PORT/HOSTNAME are Next's own env vars; default port 3000)
@@ -292,7 +416,7 @@ src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summar
                      supplements, supplement_logs
 src/db/index.ts      sqlite connection + migrate-on-boot + private file modes
 src/db/queries.ts    aggregate SQL (single-source-per-day, local-day windows)
-src/lib/auth.ts      scrypt verify, session cookie sign/verify, bearer check, throttle
+src/lib/auth.ts      scrypt verify, session cookie sign/verify, throttle
 src/lib/auth-config.ts  credential loading + fail-fast validation
 src/lib/day.ts       timezone helpers: local day, windows, formatting
 src/lib/xml.ts       incremental Apple Health XML parser (+ <Me>)
@@ -322,11 +446,11 @@ of saying the native sqlite module could not be loaded. It is never a code bug. 
 
 **Server exits at boot with a credential error** — fail-fast auth validation. Check
 `~/.config/healthvault/auth.env` (`HEALTHVAULT_PASSWORD_HASH` in `scrypt:N:r:p:salt:hash` form,
-`HEALTHVAULT_SESSION_SECRET` ≥ 32 chars) and `~/.config/healthvault/token`; for Docker, `.env`.
+`HEALTHVAULT_SESSION_SECRET` ≥ 32 chars); for Docker, `.env`.
 
-**MCP tools return 401** — the bearer token changed or is missing: check
-`~/.config/healthvault/token`, then restart the MCP client/harness. **Connection refused** — start
-the app: start it (`PORT=3040 bun run start`, or via your supervisor).
+**MCP tools return 401** — something in front of the app is demanding credentials (the app's agent
+surface needs none): check for a reverse proxy or another build on that port. **Connection
+refused** — start the app (`PORT=3040 bun run start`, or via your supervisor).
 
 ## Verify
 
@@ -347,10 +471,9 @@ uploaded twice — 572,946 rows inserted, then 0 inserted / 572,946 duplicates.
 
 The image runs `next start` on node 22 as the non-root `node` user (uid 1000) on port 3040. The
 database lives on the host at `./data/health.db` and is bind-mounted to `/data` in the container.
-Auth is mandatory: copy `.env.example` to `.env` (git-ignored), set
-`HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET` and either `HEALTHVAULT_API_TOKEN` or
-the read-only token mount (`~/.config/healthvault/token` → `/run/healthvault/token`), or the
-container exits at boot.
+Auth is mandatory for the UI: copy `.env.example` to `.env` (git-ignored) and set
+`HEALTHVAULT_PASSWORD_HASH` and `HEALTHVAULT_SESSION_SECRET`, or the container exits at boot.
+Agent clients need no token.
 
 ```bash
 cp .env.example .env && $EDITOR .env

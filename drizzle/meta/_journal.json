@@ -22,6 +22,20 @@
       "when": 1794284659764,
       "tag": "0002_cooing_iron_fist",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794396538714,
+      "tag": "0003_recipes_measures_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794413286621,
+      "tag": "0004_ingredient_snapshots_history",
+      "breakpoints": true
     }
   ]
 }

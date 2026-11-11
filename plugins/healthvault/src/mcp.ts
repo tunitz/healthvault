@@ -20,14 +20,14 @@ import {
 
 import { createClient } from "./client";
 import { createToolDefinitions, type ToolDefinition } from "./definitions";
-import { resolveBaseUrl, resolveTimeoutMs, resolveToken } from "./server";
+import { resolveBaseUrl, resolveTimeoutMs } from "./server";
 
 const SERVER_NAME = "healthvault";
 const SERVER_VERSION = "0.1.0";
 
 const INSTRUCTIONS = [
   "Start every session with healthvault_context so answers use the user's current profile, timezone and today's local day, today's nutrition, weight trend, supplements, training and data freshness.",
-  "Confirm destructive actions with the user first: deletes (healthvault_meal_delete, healthvault_food_delete, healthvault_measurement_delete, healthvault_supplement_delete) and the target day of healthvault_copy_day.",
+  "Confirm destructive actions with the user first: deletes (healthvault_meal_delete, healthvault_food_delete, healthvault_measurement_delete, healthvault_supplement_delete) and the target day of healthvault_copy_day. healthvault_recipe_delete archives a recipe that has logged history instead of deleting it. For past-meal corrections after a food's nutrition changed, run healthvault_food_history_preview and confirm the exact rows before healthvault_food_history_refresh.",
   "Apple Health imports stay a manual user action: tools only read imported data, and healthvault_uploads_recent shows import history.",
 ].join(" ");
 
@@ -77,8 +77,8 @@ export function createHealthVaultServer(definitions: ToolDefinition[]): McpServe
           content: [{ type: "text", text: JSON.stringify(result, null, 2) ?? "null" }],
         };
       } catch (error) {
-        // The API client already turns transport, auth and app failures into
-        // actionable messages; the token itself never appears in them.
+        // The API client already turns transport and app failures into
+        // actionable messages.
         return {
           content: [
             {
@@ -99,10 +99,6 @@ async function main(): Promise<void> {
   const client = createClient({
     baseUrl: resolveBaseUrl(),
     timeoutMs: resolveTimeoutMs(),
-    // Resolved per request so a token written after the client started is used
-    // without restarting the harness. A missing token fails the tool call with
-    // an actionable message; tools/list still works.
-    token: resolveToken,
   });
 
   const server = createHealthVaultServer(createToolDefinitions(client));

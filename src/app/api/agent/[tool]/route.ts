@@ -12,17 +12,31 @@ import {
 } from "@/lib/services/measurements";
 import {
   addFood,
+  applyFoodTemplate,
   copyDay,
   dayNutrition,
   deleteEntry,
   deleteFood,
+  getEntry,
   logMeal,
+  logRecipe,
   nutritionRange,
   resolveTargets,
   searchFoods,
   setTargets,
   updateEntry,
 } from "@/lib/services/nutrition";
+import {
+  applyHistoryRefresh,
+  previewHistoryRefresh,
+} from "@/lib/services/food-history";
+import {
+  createRecipe,
+  deleteRecipe,
+  getRecipe,
+  updateRecipe,
+} from "@/lib/services/recipes";
+import { listFoodTemplates } from "@/lib/services/food-templates";
 import {
   ageOf,
   getProfile,
@@ -42,7 +56,6 @@ import {
 import { recentUploads, recordsForType, typeStats, workoutHistory } from "@/db/queries";
 import { currentDay } from "@/lib/services/context";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
-import { requireToken } from "@/lib/auth";
 import { ValidationError, dayField, enumField, fail, numField, readJson, str } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -87,6 +100,7 @@ const TOOLS = {
   meal_log: (body: Record<string, unknown>) => logMeal(body),
   meal_update: (body: Record<string, unknown>) => updateEntry(body.id, body),
   meal_delete: (body: Record<string, unknown>) => deleteEntry(body.id),
+  meal_get: (body: Record<string, unknown>) => getEntry(body.id),
 
   nutrition_day: (body: Record<string, unknown>) => dayNutrition(dayField(body.day, "day", currentDay())),
   nutrition_summary: (body: Record<string, unknown>) => {
@@ -134,22 +148,33 @@ const TOOLS = {
     if (!result.deleted && !result.archived) fail("supplement not found", 404);
     return result;
   },
+
+  recipe_create: (body: Record<string, unknown>) => createRecipe(body),
+  recipe_get: (body: Record<string, unknown>) => getRecipe(body.id ?? body.recipeId),
+  recipe_log: (body: Record<string, unknown>) => logRecipe(body),
+  recipe_update: (body: Record<string, unknown>) => updateRecipe(body.id ?? body.recipeId, body),
+  recipe_delete: (body: Record<string, unknown>) => {
+    const result = deleteRecipe(body.id ?? body.recipeId);
+    if (!result.deleted && !result.archived) fail("recipe not found", 404);
+    return result;
+  },
+
+  food_template_list: () => ({ templates: listFoodTemplates() }),
+  food_template_apply: (body: Record<string, unknown>) =>
+    applyFoodTemplate(body.id, body.template, { overwrite: body.overwrite === true }),
+
+  food_history_preview: (body: Record<string, unknown>) => previewHistoryRefresh(body),
+  food_history_refresh: (body: Record<string, unknown>) => applyHistoryRefresh(body),
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
-export async function GET(request: Request) {
-  const denied = requireToken(request);
-  if (denied) return denied;
-
+export async function GET() {
   return NextResponse.json({
     tools: AGENT_TOOLS,
-    posture: "single-user; Authorization: Bearer token required on every request",
+    posture: "single-user; local agent surface, no token required (trusted LAN only)",
   });
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ tool: string }> }) {
-  const denied = requireToken(req);
-  if (denied) return denied;
-
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
     return NextResponse.json({ error: "content-type must be application/json" }, { status: 415 });
   }

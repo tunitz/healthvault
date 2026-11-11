@@ -95,12 +95,21 @@ export function localDayWindow(day: string, tz: string = DEFAULT_TIMEZONE): { st
   return { startMs: localDayStartMs(day, tz), endMs: localDayEndMs(day, tz) };
 }
 
-/** Epoch ms for a wall-clock time ("HH:mm") on a local day. */
+/** Epoch ms for a wall-clock time ("HH:mm" or "HH:mm:ss") on a local day. */
 export function localTimeMs(day: string, time: string, tz: string = DEFAULT_TIMEZONE): number {
-  const m = time.match(/^(\d{2}):(\d{2})$/);
-  const naive = Date.parse(`${day}T${m ? `${m[1]}:${m[2]}` : "00:00"}:00Z`);
+  const m = time.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  const clock = m ? `${m[1]}:${m[2]}:${m[3] ?? "00"}` : "00:00:00";
+  const naive = Date.parse(`${day}T${clock}Z`);
   const first = naive - offsetAt(naive, tz);
   return naive - offsetAt(first, tz);
+}
+
+/** "HH:mm:ss" in the local zone; used when moving an entry between days. */
+export function formatClockSeconds(ms: number | null | undefined, tz: string = DEFAULT_TIMEZONE): string {
+  if (!ms) return "—";
+  const p = partsInZone(ms, tz);
+  const two = (v: number) => String(v).padStart(2, "0");
+  return `${two(p.hour)}:${two(p.minute)}:${two(p.second)}`;
 }
 
 export function addDays(day: string, n: number): string {
