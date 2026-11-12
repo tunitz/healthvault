@@ -17,7 +17,8 @@ Environment=HOSTNAME=0.0.0.0
 Environment=DATABASE_PATH=/home/tunitz/projects/healthvault/data/health.db
 # Single-user login credentials (0600, outside the repo). The app fails fast at boot if missing.
 EnvironmentFile=%h/.config/healthvault/auth.env
-# The agent API needs no token; it stays reachable only on the trusted LAN.
+# The agent API requires a bearer token or session. Set HEALTHVAULT_ALLOWED_HOSTS in auth.env
+# to the exact LAN IP/DNS name the browser uses; keep this host allowlist narrow.
 # The database and backups hold health data: files created by the service stay owner-only.
 UMask=0077
 ExecStart=/home/tunitz/.bun/bin/bun --bun node_modules/next/dist/bin/next start -H 0.0.0.0 -p 3040

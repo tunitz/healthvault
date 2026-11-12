@@ -1,0 +1,11 @@
+# Bun's own settings. `bun test` reads [test]; dev/build/start ignore it.
+#
+# `bun test` reads this file from the working directory only (no parent-directory search), so run
+# it from the repo root to get the preload below; otherwise the guard in `src/db/index.ts` still
+# refuses live data at import time. Per-file isolation is *not* configurable here: Bun's test config
+# has no `isolate` key, so it belongs to the `test` scripts in package.json (`bun test --isolate`,
+# and `test:src` for the acceptance run over src/).
+[test]
+# Marks every test process and allocates a throwaway DATABASE_PATH unless one was supplied, so a
+# bare `bun test` can never open the live ./data/health.db. See src/test/preload.ts.
+preload = ["./src/test/preload.ts"]

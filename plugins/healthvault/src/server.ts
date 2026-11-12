@@ -1,10 +1,14 @@
+import { lstatSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 /**
  * Thin HTTP client for the HealthVault agent API.
  *
  * The MCP server never touches SQLite directly: every tool goes through
  * `POST /api/agent/<tool>`, the same service layer the web UI uses. The agent
- * surface takes no token — it is a local, single-user endpoint — so only the
- * base URL and timeout are configurable.
+ * machine API accepts a bearer token; base URL and timeout are client options,
+ * while the token comes from the process environment or a private file.
  */
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:3040";
@@ -20,6 +24,39 @@ export interface ServerOptions {
   timeoutMs?: number;
   /** Injectable fetch, mainly for tests. */
   fetchImpl?: typeof fetch;
+}
+
+function configuredToken(): string {
+  const token = nonEmptyString(process.env.HEALTHVAULT_TOKEN);
+  const tokenFile = nonEmptyString(process.env.HEALTHVAULT_TOKEN_FILE);
+  if (token && tokenFile) {
+    throw new Error("Set only one of HEALTHVAULT_TOKEN or HEALTHVAULT_TOKEN_FILE");
+  }
+  if (token) {
+    if (token.length < 32) throw new Error("HEALTHVAULT_TOKEN must be at least 32 characters");
+    return token;
+  }
+  if (!tokenFile) throw new Error("Set HEALTHVAULT_TOKEN or HEALTHVAULT_TOKEN_FILE for the MCP client");
+
+  const path = tokenFile === "~"
+    ? homedir()
+    : tokenFile.startsWith("~/")
+      ? join(homedir(), tokenFile.slice(2))
+      : tokenFile;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o600) {
+      throw new Error("HEALTHVAULT_TOKEN_FILE must be a regular owner-only file (mode 0600)");
+    }
+    const value = readFileSync(path, "utf8").trim();
+    if (value.length < 32) {
+      throw new Error("HEALTHVAULT_TOKEN_FILE must contain a token of at least 32 characters");
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("HEALTHVAULT_TOKEN_FILE")) throw error;
+    throw new Error(`HEALTHVAULT_TOKEN_FILE could not be read: ${path}`);
+  }
 }
 
 export class HealthVaultError extends Error {
@@ -97,6 +134,7 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
   const doFetch = options.fetchImpl ?? fetch;
+  const token = configuredToken();
 
   async function request<T>(tool: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
     const url = `${baseUrl}/api/agent/${encodeURIComponent(tool)}`;
@@ -120,6 +158,7 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
         headers: {
           "content-type": "application/json",
           accept: "application/json",
+          authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(body ?? {}),
         signal: controller.signal,

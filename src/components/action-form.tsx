@@ -39,6 +39,7 @@ export function ActionForm({
   children,
   resetOnSuccess = false,
   confirm,
+  onSuccess,
 }: {
   action: ActionFn;
   className?: string;
@@ -46,13 +47,22 @@ export function ActionForm({
   resetOnSuccess?: boolean;
   /** Hard deletes have no undo, so the browser asks before the action runs. */
   confirm?: string;
+  /** Called once per successful result, so a parent can clear a sibling form's stale state. */
+  onSuccess?: (state: ActionState) => void;
 }) {
   const [state, formAction] = useActionState<ActionState, FormData>(action, { ok: true });
   const ref = useRef<HTMLFormElement>(null);
+  const handledState = useRef<ActionState | null>(null);
 
   useEffect(() => {
     if (resetOnSuccess && state.ok && state.message) ref.current?.reset();
   }, [state, resetOnSuccess]);
+
+  useEffect(() => {
+    if (state === handledState.current) return;
+    handledState.current = state;
+    if (state.ok && state.message) onSuccess?.(state);
+  }, [state, onSuccess]);
 
   return (
     <form

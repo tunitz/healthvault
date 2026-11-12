@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { waistUnit, weightUnit, type Units } from "@/lib/units";
 
 const SELECT =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "h-8 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const KIND_LABEL: Record<string, { value: string; unit?: string[] }> = {
   weight: { value: "Weight", unit: ["kg", "lb"] },

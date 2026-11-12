@@ -1,7 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { foodLogIngredients, foodLogRevisions } from "@/db/schema";
+import { foodLog, foodLogIngredients, foodLogRevisions } from "@/db/schema";
 import type { FoodEntry, Macros } from "@/lib/services/nutrition";
+import { fail, idField } from "@/lib/validate";
 
 /**
  * Per-ingredient snapshots and their audit trail.
@@ -170,6 +171,69 @@ export function writeRevision(revision: SnapshotRevision): void {
     .run();
 }
 
+export type EntryRevision = typeof foodLogRevisions.$inferSelect;
+
+export type EntryRevisionSummary = {
+  id: number;
+  at: number;
+  reason: string;
+  /** True when the correction changed one ingredient row rather than the aggregate entry. */
+  ingredient: boolean;
+};
+
+/** One audit row as the UI shows it; the full previous/new JSON stays in the table. */
+function summarizeRevision(row: EntryRevision): EntryRevisionSummary {
+  return {
+    id: row.id,
+    at: row.createdAtMs,
+    reason: row.reason,
+    ingredient: row.foodLogIngredientId !== null,
+  };
+}
+
+/**
+ * A compact audit trail for every entry of a day view, newest first.
+ *
+ * The meal card only needs to say "corrected, here is when and why", so this reads the same
+ * `food_log_revisions` rows as `listEntryRevisions` for a bounded set of entry ids in one query
+ * rather than one query per card. Unknown ids simply have no key.
+ */
+export function entryRevisionSummaries(entryIds: number[]): Record<number, EntryRevisionSummary[]> {
+  const out: Record<number, EntryRevisionSummary[]> = {};
+  if (entryIds.length === 0) return out;
+  const rows = db
+    .select()
+    .from(foodLogRevisions)
+    .where(inArray(foodLogRevisions.foodLogId, entryIds))
+    .orderBy(desc(foodLogRevisions.createdAtMs), desc(foodLogRevisions.id))
+    .all();
+  for (const row of rows) {
+    (out[row.foodLogId] ??= []).push(summarizeRevision(row));
+  }
+  return out;
+}
+
+/**
+ * The correction/rescale audit trail for one logged entry, newest first. A deleted entry's
+ * revisions are deleted with it, so a missing entry is a 404 rather than an empty list.
+ */
+export function listEntryRevisions(foodLogId: unknown): EntryRevision[] {
+  const id = idField(foodLogId, "foodLogId");
+  const entry = db.select({ id: foodLog.id }).from(foodLog).where(eq(foodLog.id, id)).get();
+  if (!entry) fail("meal entry not found", 404);
+  return db
+    .select()
+    .from(foodLogRevisions)
+    .where(eq(foodLogRevisions.foodLogId, id))
+    .orderBy(desc(foodLogRevisions.createdAtMs), desc(foodLogRevisions.id))
+    .all();
+}
+
+/** The same trail as `listEntryRevisions`, shaped for the day-view expander. */
+export function listEntryRevisionSummaries(foodLogId: unknown): EntryRevisionSummary[] {
+  return listEntryRevisions(foodLogId).map(summarizeRevision);
+}
+
 export function ingredientJson(row: LoggedIngredient): string {
   return JSON.stringify({
     id: row.id,
@@ -329,6 +393,8 @@ export type LoggedIngredientEntry = FoodEntry & {
   ingredients: LoggedIngredient[];
   /** null for a plain food entry; true only when the full child snapshot exists. */
   ingredientSnapshotComplete: boolean | null;
+  /** Correction/rescale audit rows for this entry, newest first; empty when never corrected. */
+  revisions: EntryRevisionSummary[];
 };
 
 /** The expected child count recorded with the parent snapshot, or null when it was not recorded. */
@@ -345,13 +411,19 @@ function expectedIngredientCount(json: string | null): number | null {
 /** Attach the full child snapshot to day-view entries and label legacy aggregate-only rows. */
 export function withIngredientSnapshots(entries: FoodEntry[]): LoggedIngredientEntry[] {
   const byEntry = ingredientsByEntry(entries.map((entry) => entry.id));
+  const revisions = entryRevisionSummaries(entries.map((entry) => entry.id));
   return entries.map((entry) => {
+    const { wheyActionJson: _wheyActionJson, wheyActionDay: _wheyActionDay, ...publicEntry } =
+      entry as typeof foodLog.$inferSelect;
+    void _wheyActionJson;
+    void _wheyActionDay;
     const ingredients = byEntry.get(entry.id) ?? [];
     const isRecipeEntry = entry.recipeId !== null || entry.recipeServingJson !== null;
     const expected = expectedIngredientCount(entry.recipeServingJson);
     return {
-      ...entry,
+      ...publicEntry,
       ingredients,
+      revisions: revisions[entry.id] ?? [],
       // A non-empty list is not enough: a partially deleted child snapshot must not look complete.
       ingredientSnapshotComplete: isRecipeEntry
         ? expected !== null && ingredients.length === expected

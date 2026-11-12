@@ -53,15 +53,15 @@ const STAGE: Record<string, number> = {
 const num = (v: string | undefined): number | undefined => (v === undefined || v === "" ? undefined : Number(v));
 const dayOf = (iso: string) => iso.slice(0, 10);
 
-// Apple exports whatever unit the recording device used, and the same workout can arrive in
-// miles/kJ/hours. Everything is normalised on the way in so the UI never has to guess.
-export function toKm(value: number, unit?: string): number {
-  switch ((unit ?? "").toLowerCase()) {
+// Apple exports whatever unit the recording device used; known distance units are normalised to km.
+export function toKm(value: number, unit?: string): number | undefined {
+  switch ((unit ?? "").trim().toLowerCase()) {
+    case "km": return value;
     case "mi": return value * 1.609344;
     case "m": return value / 1000;
     case "yd": return value * 0.0009144;
     case "ft": return value * 0.0003048;
-    default: return value;
+    default: return undefined;
   }
 }
 export function toKcal(value: number, unit?: string): number {
@@ -154,6 +154,14 @@ export function createHealthParser() {
       // attribute fallbacks cover exports from older iOS versions, where these were attributes
       const distRaw = num(distStat?.sum) ?? num(a.totalDistance as string | undefined);
       const distUnit = distStat?.unit ?? (a.totalDistanceUnit as string | undefined);
+      const distanceKm = distRaw === undefined ? undefined : toKm(distRaw, distUnit);
+      const hasUnsupportedDistanceUnit = distRaw !== undefined && distanceKm === undefined && !!distUnit?.trim();
+      const totalDistance = distanceKm ?? (hasUnsupportedDistanceUnit ? distRaw : undefined);
+      const totalDistanceUnit = distanceKm !== undefined || distRaw === undefined
+        ? "km"
+        : hasUnsupportedDistanceUnit
+          ? distUnit
+          : undefined;
       const energyRaw = num(energyStat?.sum) ?? num(a.totalEnergyBurned as string | undefined);
       const energyUnit = energyStat?.unit ?? (a.totalEnergyBurnedUnit as string | undefined);
 
@@ -164,8 +172,10 @@ export function createHealthParser() {
         // durationUnit is "min" in most real exports; storing it as seconds without converting
         // made every workout look 60x shorter than it was.
         durationSeconds: num(a.duration) === undefined ? undefined : toSeconds(num(a.duration)!, a.durationUnit as string | undefined),
-        totalDistance: distRaw === undefined ? undefined : toKm(distRaw, distUnit),
-        totalDistanceUnit: "km",
+        // Persist unsupported distances only with their original unit so the query layer keeps
+        // them unknown. A numeric value without a unit cannot safely be interpreted as km.
+        totalDistance,
+        totalDistanceUnit,
         totalEnergyBurned: energyRaw === undefined ? undefined : toKcal(energyRaw, energyUnit),
         totalEnergyBurnedUnit: "kcal",
         avgHr: num(hrStat?.average),

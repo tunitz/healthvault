@@ -3,7 +3,21 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Dumbbell, LayoutDashboard, LogOut, MoreHorizontal, Pill, Search, Upload, UserRound, Utensils } from "lucide-react";
+import {
+  Activity,
+  BookOpen,
+  CookingPot,
+  Dumbbell,
+  History,
+  LayoutDashboard,
+  LogOut,
+  MoreHorizontal,
+  Pill,
+  Search,
+  Upload,
+  UserRound,
+  Utensils,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
@@ -17,8 +31,13 @@ const PRIMARY = [
   { href: "/supplements", label: "Supplements", Icon: Pill },
 ] as const;
 
+/** Everything outside the four bottom-bar destinations. The nutrition library lives here so the
+ *  bottom bar keeps four large tap targets; the same list backs the sheet and the desktop menu. */
 const MORE = [
   { href: "/workouts", label: "Workouts", Icon: Dumbbell },
+  { href: "/nutrition/foods", label: "Foods", Icon: BookOpen },
+  { href: "/nutrition/recipes", label: "Recipes", Icon: CookingPot },
+  { href: "/nutrition/corrections", label: "Past meals", Icon: History },
   { href: "/explorer", label: "Explorer", Icon: Search },
   { href: "/profile", label: "Profile", Icon: UserRound },
   { href: "/uploads", label: "Import", Icon: Upload },
@@ -32,7 +51,10 @@ export function AppNav() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-  const moreActive = MORE.some((item) => isActive(pathname, item.href));
+  // A route under a primary tab (e.g. /nutrition/foods) already lights that tab, so "More"
+  // only highlights for destinations the primary bar does not cover.
+  const moreActive = MORE.some((item) => isActive(pathname, item.href)) &&
+    !PRIMARY.some((item) => isActive(pathname, item.href));
 
   // The login screen has no app chrome.
   if (pathname === "/login") return null;
@@ -66,7 +88,7 @@ export function AppNav() {
           </Link>
 
           <nav aria-label="Primary" className="hidden flex-1 items-center gap-0.5 md:flex">
-            {[...PRIMARY, ...MORE].map(({ href, label }) => {
+            {PRIMARY.map(({ href, label }) => {
               const active = isActive(pathname, href);
               return (
                 <Link
@@ -74,7 +96,7 @@ export function AppNav() {
                   href={href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "rounded-md px-2 py-1.5 text-xs transition-colors lg:px-3 lg:text-sm",
+                    "rounded-md px-2 py-1.5 text-xs whitespace-nowrap transition-colors",
                     active
                       ? "bg-muted font-medium text-foreground"
                       : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -84,6 +106,42 @@ export function AppNav() {
                 </Link>
               );
             })}
+            {/* Eleven labels do not fit the 1152 px container at text-sm, so the secondary
+                destinations stay behind the same "More" panel as the bottom bar until xl. */}
+            <span className="hidden items-center gap-0.5 xl:flex">
+              {MORE.map(({ href, label }) => {
+                const active = isActive(pathname, href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "rounded-md px-2 py-1.5 text-xs whitespace-nowrap transition-colors",
+                      active
+                        ? "bg-muted font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                  >
+                    {label}
+                  </Link>
+                );
+              })}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setMoreOpen(true)}
+              aria-expanded={moreOpen}
+              aria-haspopup="dialog"
+              className={cn(
+                "px-2 text-xs xl:hidden",
+                moreActive ? "bg-muted font-medium text-foreground" : "text-muted-foreground",
+              )}
+            >
+              More
+            </Button>
           </nav>
 
           <div className="ms-auto flex items-center gap-1 md:ms-0">
@@ -122,8 +180,10 @@ export function AppNav() {
                       active ? "text-primary" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <Icon aria-hidden className="size-5" />
-                    <span>{label}</span>
+                    <Icon aria-hidden className="size-5 shrink-0" />
+                    <span className="max-w-full min-w-0 truncate text-[10px] leading-tight min-[380px]:text-[11px]" title={label}>
+                      {label}
+                    </span>
                   </Link>
                 </li>
               );
@@ -139,31 +199,43 @@ export function AppNav() {
                   moreActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                <MoreHorizontal aria-hidden className="size-5" />
-                <span>More</span>
+                <MoreHorizontal aria-hidden className="size-5 shrink-0" />
+                <span className="max-w-full min-w-0 truncate px-0.5 text-[10px] leading-tight min-[380px]:text-[11px]">
+                  More
+                </span>
               </button>
             </li>
           </ul>
         </nav>
 
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/30 backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 md:hidden" />
-          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-xl data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom md:hidden">
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/30 backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 md:bg-foreground/10 md:backdrop-blur-none" />
+          <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto rounded-t-2xl border-t bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-xl data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom md:inset-x-auto md:top-[calc(3.5rem+env(safe-area-inset-top))] md:right-4 md:bottom-auto md:w-80 md:rounded-xl md:border">
             <Dialog.Title className="text-sm font-medium">More</Dialog.Title>
-            <Dialog.Description className="sr-only">Sections not shown in the bottom bar</Dialog.Description>
-            <nav aria-label="More" className="mt-3 grid grid-cols-2 gap-2">
-              {MORE.map(({ href, label, Icon }) => (
-                <Dialog.Close asChild key={href}>
-                  <Link
-                    href={href}
-                    aria-current={isActive(pathname, href) ? "page" : undefined}
-                    className="flex items-center gap-2 rounded-lg border border-border px-3 py-3 text-sm text-foreground hover:bg-accent"
-                  >
-                    <Icon aria-hidden className="size-4 text-muted-foreground" />
-                    {label}
-                  </Link>
-                </Dialog.Close>
-              ))}
+            <Dialog.Description className="sr-only">
+              Sections not shown in the primary navigation
+            </Dialog.Description>
+            <nav aria-label="More" className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-1">
+              {MORE.map(({ href, label, Icon }) => {
+                const active = isActive(pathname, href);
+                return (
+                  <Dialog.Close asChild key={href}>
+                    <Link
+                      href={href}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex min-h-11 items-center gap-2 rounded-lg border px-3 py-3 text-sm hover:bg-accent",
+                        active
+                          ? "border-primary/40 bg-muted font-medium text-foreground"
+                          : "border-border text-foreground",
+                      )}
+                    >
+                      <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 truncate">{label}</span>
+                    </Link>
+                  </Dialog.Close>
+                );
+              })}
             </nav>
             <div className="mt-3 flex justify-end">
               <Dialog.Close asChild>

@@ -4,18 +4,20 @@ Single-user web app: upload an Apple Health `Export.zip`, it is parsed into SQLi
 browsed in a Next.js dashboard (shadcn components + recharts).
 
 Stack: **bun**, **Next.js 16** (App Router, TS), **SQLite** (`better-sqlite3`) via **drizzle-orm**,
-**shadcn** (radix + nova preset). Single-user login (password + session cookie), credential-less
-agent API on the trusted LAN, no cloud, one local database file.
+**shadcn** (radix + nova preset). Single-user login (password + session cookie), bearer-protected
+agent API, no cloud, one local database file.
 
 ## What it tracks
 
 | Area | Route | Storage |
 |---|---|---|
 | Apple Health import (records, workouts, activity days) | `/`, `/training`, `/workouts`, `/explorer`, `/uploads` | `records`, `workouts`, `activity_summaries`, `uploads` |
-| Personal profile (name, birth date, sex, height, timezone, units, work schedule, goals, notes) | `/profile` | `profile` (singleton) |
+| Personal profile (name, birth date, sex, height, timezone, units, work schedule, 5K goal, notes) | `/profile` | `profile` (singleton) |
 | Weight / body-fat / waist | `/profile` | `measurements` (manual) merged with Apple `BodyMass` |
+| Training block and strength detail (planned sessions, logged sets) | `/training` | `planned_sessions`, `strength_sets` |
 | Food, calories and macros | `/nutrition` | `foods`, `food_log`, `nutrition_targets` |
-| Supplements | `/supplements` | `supplements`, `supplement_logs` |
+| Food library, recipes and past-meal corrections | `/nutrition/foods`, `/nutrition/recipes`, `/nutrition/corrections` | `foods`, `food_revisions`, `recipes`, `recipe_ingredients`, `food_log_ingredients`, `food_log_revisions` |
+| Supplements, adherence and one-tap whey | `/supplements` | `supplements`, `supplement_logs`, `profile.whey_link_json` |
 
 Apple's `<Me>` element (birth date, biological sex) is captured during import and prefills only
 empty profile fields; it never overwrites an edited value. Height is prefilled from the newest
@@ -34,24 +36,19 @@ to boot without valid credentials.
 | Credential | Used by | Stored in |
 |---|---|---|
 | Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in the credentials env file (0600) |
+| Agent API bearer token | MCP/HTTP clients | `HEALTHVAULT_API_TOKEN` or private `HEALTHVAULT_API_TOKEN_FILE` (0600) |
 
 The credentials env file is the project-root `.env` (git-ignored, mode 0600, loaded automatically
 by Next.js) — `bun run password:set` creates and maintains it for you.
 
-Everything except `/api/health` and `/api/agent/*` requires the session cookie: unauthenticated
-pages redirect to `/login`, unauthenticated API calls get 401. Login is throttled (5 failures /
-15 min → 429). `GET /api/health` is public and returns `{"ok":true}` only.
-
-`/api/agent/*` is deliberately **credential-less**: local agents and MCP clients call it with no
-token and no cookie. It is reachable by any device that can open `0.0.0.0:3040`, so it is a
-trusted-LAN surface by construction — never port-forward or expose it to the internet. If remote
-agent access is needed, put an authenticating TLS proxy in front of the app.
-
-The token is gone, but old operator scripts keep working: `password:set` still accepts
-`--token-file <path>` and ignores it (no token file is read or written), and
-`HEALTHVAULT_API_TOKEN` / `HEALTHVAULT_API_TOKEN_FILE` are ignored if still present.
+Everything except `/api/health` requires a valid session cookie or agent bearer token as applicable:
+unauthenticated pages redirect to `/login`, unauthenticated API calls get 401. Login is throttled
+(5 failures / 15 min → 429). `GET /api/health` is public and returns `{"ok":true}` only.
+`/api/agent/*` accepts a valid session or bearer token and additionally checks the request Host
+against `HEALTHVAULT_ALLOWED_HOSTS` and any supplied Origin against that same origin.
 
 Environment variables: `DATABASE_PATH`, `HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET`,
+`HEALTHVAULT_API_TOKEN` or `HEALTHVAULT_API_TOKEN_FILE`, `HEALTHVAULT_ALLOWED_HOSTS`,
 `HEALTHVAULT_COOKIE_SECURE` (set `1` behind TLS), `HEALTHVAULT_SESSION_DAYS`.
 
 **Set or change the password:**
@@ -61,8 +58,11 @@ bun run password:set       # hidden prompt; never takes the password as an argum
 bun run password:verify    # check a password against the stored hash
 ```
 
-`password:set` writes the scrypt hash to the credentials env file and, on a fresh setup, also
-generates the `HEALTHVAULT_SESSION_SECRET`. By default it targets
+`password:set` writes the scrypt hash and, on a fresh setup, generates the
+`HEALTHVAULT_SESSION_SECRET` and API token. For the project `.env` it stores the token there (for
+Docker) and syncs a private token file for MCP clients; for an external auth env file it stores the
+private token-file path. Use `bun scripts/password.ts set --token-file <path>` to choose the file
+explicitly. By default it targets
 `~/.config/healthvault/auth.env` when that file already exists (hosts that inject credentials from
 an external file), otherwise the project `.env`; pass `--file <path>` to choose explicitly — the
 chosen target is always printed. Restart the app after changing credentials. Existing sessions stay
@@ -72,22 +72,13 @@ valid until they expire; regenerate `HEALTHVAULT_SESSION_SECRET` to invalidate t
 
 `POST /api/agent/<tool>` takes a JSON object and returns `{ ok: true, tool, result }`, or
 `{ ok: false, tool, error }` with 400/404/409/500. `GET /api/agent` lists the tools. There is no
-token or cookie on this surface; keep the service on a trusted LAN and do not expose port 3040 to
-the internet.
-
-A trusted LAN is a network assumption, **not a browser security boundary**. With no Host/Origin
-allowlist, a malicious page can use DNS rebinding to make its own hostname resolve to this LAN
-address and drive the credential-less API from the browser. Keeping the service on the LAN does not
-stop that; an allowlist in a fronting proxy (or loopback-only binding) is required and is not
-implemented here.
-
-### Upgrading from a token build
-
-Install the new server build first: rebuild and restart the app, **then** update and restart the MCP
-client. The old app build still requires a bearer token and the new client sends none, so tool calls
-return 401 until the server side is the new build. If you run MCP clients continuously, keep the old
-token file in place until the server restart. The versions are not compatible in either direction,
-so on rollback restart the old server before reverting the client.
+unauthenticated access. Machine clients send `Authorization: Bearer <token>`; a same-origin browser
+session is also accepted.
+Hostnames are denied unless explicitly listed in `HEALTHVAULT_ALLOWED_HOSTS` (comma-separated,
+exact hostnames; default `localhost,127.0.0.1,::1`). Add the LAN IP or DNS name used by the
+browser/client; do not use a wildcard. A supplied Origin must match the request's host and scheme.
+Native MCP calls without an Origin still require the bearer token. Keep the service behind TLS for
+untrusted networks.
 
 The canonical agent transport is the **MCP server** in `plugins/healthvault/` — one stdio server
 every harness can run (OpenCode, Claude Code, Claude Desktop, Cursor, …). Install and configure it
@@ -97,13 +88,17 @@ once:
 bun install -g ./plugins/healthvault    # from the project directory
 ```
 
-See `plugins/healthvault/README.md` for per-harness config snippets. Clients with no MCP support can
-call `POST /api/agent/<tool>` directly, e.g. `curl http://127.0.0.1:3040/api/agent/healthvault_context
--H 'content-type: application/json' -d '{}'`.
+See `plugins/healthvault/README.md` for per-harness config snippets. Clients without MCP can use:
+
+```bash
+curl http://127.0.0.1:3040/api/agent/healthvault_context \
+  -H "Authorization: Bearer $HEALTHVAULT_API_TOKEN" \
+  -H 'content-type: application/json' -d '{}'
+```
 
 **Reads** — `healthvault_context`, `profile_get`, `measurement_history`, `food_search`,
 `nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`, `metrics_series`,
-`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`, `recipe_get`,
+`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`, `recipe_list`, `recipe_get`,
 `food_template_list`, `meal_get`, `food_history_preview`.
 
 **Writes** — `profile_update`, `measurement_add`, `food_add`, `meal_log`, `meal_update`,
@@ -114,10 +109,13 @@ call `POST /api/agent/<tool>` directly, e.g. `curl http://127.0.0.1:3040/api/age
 **Deletes** — `measurement_delete`, `food_delete`, `meal_delete`, `supplement_delete`,
 `recipe_delete`.
 
-The surface covers every write the UI exposes, including the delete paths, plus the read-only
-aggregation behind `/api/type-stats` (`record_types`). `/api/upload` is deliberately **not**
-exposed to agents: importing an `Export.zip` stays a manual step in the UI, and `uploads_recent`
-only reports import history.
+The surface covers the nutrition, supplement, measurement and recipe writes including the delete
+paths, plus the read-only aggregation behind `/api/type-stats` (`record_types`). It is not full
+parity with the UI: starting a training block, logging strength sets, one-tap whey, the id-keyed
+food edit behind `/nutrition/foods` (agents upsert with `food_add` by name+brand), and the
+read-only serving preview have no agent tool. `/api/upload` is deliberately **not** exposed to
+agents: importing an `Export.zip` stays a manual step in the UI, and `uploads_recent` only reports
+import history.
 
 `records_recent` serves raw rows for one type (default 50, max 500) and does **not** de-duplicate
 phone/watch overlaps — use `metrics_series` for any daily total or trend, since it picks one source
@@ -132,9 +130,15 @@ object — `{ days: [{ weekday, start, end }], note? }` — alongside the legacy
 Agent-facing numbers are rounded consistently: whole kcal and grams; one decimal for kg, km, hours
 and percent; never more than two decimals.
 
-`healthvault_context` is the entry point for an agent: profile + age, today's nutrition and targets,
-the 7-day weight trend, recent workouts, 30-day sleep/steps, the supplement checklist and data
-freshness (last import, last record day).
+`healthvault_context` is the entry point for an agent: profile + age (with the parsed 5K goal and
+one-tap whey link), today's nutrition and targets, the 7-day weight trend, the supplement checklist
+and next due supplement, strength detail (sessions this week, recent exercises), recent workouts
+with 30-day sleep/steps, the current-week training & recovery summary (runs, strength, steps,
+sleep, resting HR, weekly-average weight with sparse/stale flags — no readiness score and no
+exercise calories in the food budget), and data freshness (last import, last record day, last
+workout day). `recipe_list` searches the recipe library without loading ingredients: it returns
+each recipe's id, name, servings, `archived`, and `complete`/`unresolvedCount`, so an agent can tell
+an incomplete recipe from a complete one before calling `recipe_get` for the computed macros.
 
 ### Food defaults (opt-in templates)
 
@@ -147,10 +151,12 @@ themselves.
 ```bash
 # 1. List the catalogue and its exact slugs.
 curl -sS http://127.0.0.1:3040/api/agent/food_template_list \
+  -H "Authorization: Bearer $HEALTHVAULT_API_TOKEN" \
   -H 'content-type: application/json' -d '{}'
 
 # 2. Apply one template to one saved food id. Macros are untouched.
 curl -sS http://127.0.0.1:3040/api/agent/food_template_apply \
+  -H "Authorization: Bearer $HEALTHVAULT_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"id": 12, "template": "honey"}'
 ```
@@ -233,6 +239,35 @@ Because the write surface requires a non-empty ingredient list, a recipe with no
 (legacy/manual data only) deletes normally. The older "409 for every reference" rule is gone; the
 old aggregate-only `food_log` rows themselves are untouched.
 
+### Training block, strength detail and one-tap whey (`0005`)
+
+`0005_magenta_invaders` is additive: it adds `planned_sessions` (one row per planned session, with
+`kind`, `intent`, `target_json`, `status`, and an optional `workout_id` link), `strength_sets`
+(exercise, set number, reps, load in kg, optional `workout_id` link), and `profile.goal_json` /
+`profile.whey_link_json`. No existing row is rewritten.
+
+- **Training block** (`/training`, `src/lib/services/training-plan.ts`): starting a block generates
+  all 16 weeks of `planned_sessions` and refuses when an unfinished block exists. Planned rows never
+  enter workout or volume totals; the linked imported workout stays the single source. Completing or
+  skipping a session is a status change on the plan row only.
+- **Strength log** (`/training`, `src/lib/services/strength.ts`): manual sets attach to an imported
+  workout but never create one, and are excluded from every volume/kcal surface.
+- **Weekly summary** (`/training`, `src/lib/services/training.ts`): a Sunday-start week with the
+  freshness caption; weight is the week's average (null with no readings) with a `sparse` flag
+  below two readings and `stale` when the week starts after the last record day (a missing record
+  day counts as stale), so a quiet week and a missing export do not look the same. No readiness
+  score, and exercise calories never enter the nutrition target.
+- **5K goal** (`/training`, `/profile`): shown as the profile's 5K target — sub-30:00 · 6:00 min/km
+  by default; `fiveKAttempts`/`fiveKBest` read the deduped workout set only.
+- **One-tap whey** (`/supplements`, dashboard): logging and the adherence tick share one
+  transaction, which refuses a second tagged entry for the same food on the same day; undo removes
+  both the entry and the adherence tick, and is a no-op when nothing was logged.
+- **Nutrition management**: `/nutrition/foods` (bounded search, paginated list, create/edit, safe
+  delete), `/nutrition/recipes` (list, editor, detail with per-meal overrides and a read-only
+  preview before logging), and `/nutrition/corrections` (preview → checkbox → apply with the
+  returned `previewHash`). All of them reuse the service layer, so the UI and the agent API do the
+  same arithmetic.
+
 ## Upgrading from an earlier import
 
 Workout parsing was corrected: distance/energy/heart-rate now come from the `<WorkoutStatistics>`
@@ -306,7 +341,8 @@ bun run dev                          # http://localhost:3000
 `bun run build && bun run start` for production. Dev and start both fail fast without credentials:
 run `bun run password:set` once (see Authentication) — it creates everything needed. `next build`
 itself needs no credentials. The database file defaults to `./data/health.db`
-(git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. Migrations run on every
+(git-ignored); set `DATABASE_PATH=/path/to/health.db` to point elsewhere. A `DATABASE_PATH` that is
+set but empty is an error rather than a silent fallback to the default. Migrations run on every
 boot inside `src/db/index.ts` (`migrate()` from the drizzle better-sqlite3 migrator) — a fresh file
 is brought up to schema automatically.
 
@@ -329,22 +365,41 @@ starting it again.
 
 ## Security posture
 
-The service listens on `0.0.0.0:3040` so the phone/PWA can reach it. The UI is protected by the
-session cookie; `/api/agent/*` is intentionally credential-less for local agents, so any device on
-the LAN can read and write health data through it, and any browser on the LAN is a potential path to
-it via DNS rebinding (see above). Over plain HTTP the login password crosses the LAN in clear text —
-keep the service on a trusted network, or put an authenticating TLS proxy in front
-(`deploy/Caddyfile.example`, then set `HEALTHVAULT_COOKIE_SECURE=1`). Do not port-forward it.
+The service listens on `0.0.0.0:3040` so the phone/PWA can reach it. The UI uses the session cookie;
+`/api/agent/*` requires a session or bearer token, and enforces an explicit Host allowlist plus
+same-origin checks for browser requests. Add the LAN IP/name to `HEALTHVAULT_ALLOWED_HOSTS` in the
+credentials env file. Over plain HTTP the login password crosses the LAN in clear text — keep the
+service on a trusted network, or put an authenticating TLS proxy in front (`deploy/Caddyfile.example`,
+then set `HEALTHVAULT_COOKIE_SECURE=1`). Do not port-forward it.
 Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer`, COOP/CORP `same-origin` and a report-only CSP; the service worker
 never caches `/login`, `/api/auth/*` or any `/api/*`. Logout clears the cookie, site caches and
 storage (`Clear-Site-Data`). Known tradeoff: pages cached by the PWA while authenticated remain
 readable offline on that device until logout clears them.
 
-Tests live in `src/test/` (`bun test`) and run against throwaway databases under `/tmp/opencode`;
-they cover the services and the auth surface. They are a development aid, not a deployment safety
-net: verification is still `bun run typecheck && bun run lint && bun run build` plus the live checks
-in `deploy/README.md`.
+Tests live in `src/test/` and run against throwaway databases under `/tmp/opencode`; they cover the
+services and the auth surface. A process that the guard can identify as a test run refuses the live
+`./data/health.db`: the `bunfig.toml` preload — resolved from the working directory, so run
+`bun test` at the repo root — marks the run and, when `DATABASE_PATH` is unset or blank, allocates a
+scratch database; `src/db/guard.ts` then refuses the default path and anything inside the project's
+`data/` directory — including a symlink, a not-yet-created file under a symlinked directory, and any
+path it cannot resolve — even when `DATABASE_PATH` names one. `src/db/index.ts` runs the same guard,
+so a spawned worker that bypasses the preload is still covered. Per-file isolation belongs to the
+`test` scripts (`bun run test` → `bun test --isolate`, and `bun run test:src` for the acceptance run
+over `src/`), which makes each file re-run the preload and start from its own scratch database.
+Bun's default is one shared global for every file and its configuration has no `isolate` key, so
+use the script: a bare `bun test src/` still uses scratch storage, but one preload allocation serves
+the whole run except where a suite pins its own path. To pin a specific scratch file, set
+`DATABASE_PATH=/tmp/opencode/<name>.db` yourself.
+
+The preload also disables auto-discovery of the abandoned Rust rewrite's `target/debug/healthvault`
+binary: `src/test/db-migrate-cross-stack.test.ts` skips unless `HEALTHVAULT_RUST_BIN` is set
+explicitly, rather than booting a stale worktree build.
+
+These guards are a development aid, not a deployment safety net. They cover code that imports
+`@/db`; a script that hands a path straight to SQLite, or a process with no test signal at all
+(such as a production service run by hand), is outside them. Verification is still
+`bun run typecheck && bun run lint && bun run build` plus the live checks in `deploy/README.md`.
 
 ## Installation
 
@@ -413,21 +468,26 @@ Parsing rules worth knowing:
 ```
 src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summaries,
                      profile, measurements, nutrition_targets, foods, food_log,
+                     food_log_ingredients, food_revisions, food_log_revisions,
+                     recipes, recipe_ingredients, planned_sessions, strength_sets,
                      supplements, supplement_logs
 src/db/index.ts      sqlite connection + migrate-on-boot + private file modes
-src/db/queries.ts    aggregate SQL (single-source-per-day, local-day windows)
+src/db/queries.ts    aggregate SQL (single-source-per-day, deduped workouts, local-day windows)
 src/lib/auth.ts      scrypt verify, session cookie sign/verify, throttle
 src/lib/auth-config.ts  credential loading + fail-fast validation
 src/lib/day.ts       timezone helpers: local day, windows, formatting
 src/lib/xml.ts       incremental Apple Health XML parser (+ <Me>)
 src/lib/ingest.ts    streaming ingest + profile prefill
-src/lib/services/    profile, measurements, nutrition, supplements, context
+src/lib/services/    profile, measurements, nutrition, recipes, food-history, training,
+                     training-plan, strength, whey, supplements, context
 src/proxy.ts         Next 16 Proxy: session gate, public allowlist, no-store caching
 src/instrumentation.ts  boot-time credential validation
 src/app/             dashboard (/), login, training, workouts, explorer, uploads,
-                     profile, nutrition, supplements + api/auth, api/health,
-                     api/upload, api/type-stats, api/agent
-src/components/      charts, explorer client, upload form, login form, app nav, ui/* (shadcn)
+                     profile, nutrition (+ /nutrition/foods, /nutrition/recipes,
+                     /nutrition/corrections), supplements + api/auth, api/health,
+                     api/upload, api/type-stats, api/reminders, api/agent
+src/components/      charts, explorer client, upload form, login form, app nav,
+                     nutrition/*, training/*, supplements/*, ui/* (shadcn)
 scripts/backup-db.ts WAL-safe online backup
 scripts/password.ts  password:set / password:verify credential tool
 plugins/healthvault/ MCP stdio server exposing the agent API to any harness
@@ -448,9 +508,9 @@ of saying the native sqlite module could not be loaded. It is never a code bug. 
 `~/.config/healthvault/auth.env` (`HEALTHVAULT_PASSWORD_HASH` in `scrypt:N:r:p:salt:hash` form,
 `HEALTHVAULT_SESSION_SECRET` ≥ 32 chars); for Docker, `.env`.
 
-**MCP tools return 401** — something in front of the app is demanding credentials (the app's agent
-surface needs none): check for a reverse proxy or another build on that port. **Connection
-refused** — start the app (`PORT=3040 bun run start`, or via your supervisor).
+**MCP tools return 401/403** — verify the MCP process has `HEALTHVAULT_TOKEN_FILE` or
+`HEALTHVAULT_TOKEN`, and that the app's `HEALTHVAULT_ALLOWED_HOSTS` includes the client host.
+**Connection refused** — start the app (`PORT=3040 bun run start`, or via your supervisor).
 
 ## Verify
 
@@ -458,8 +518,8 @@ refused** — start the app (`PORT=3040 bun run start`, or via your supervisor).
 bun run typecheck && bun run lint && bun run build
 ```
 
-There are no committed test suites (removed by design — see Security posture). After any deploy,
-run the live checks in `deploy/README.md` ("Verification after deploy").
+Regression suites live in `src/test/` and `plugins/healthvault/src/`; run them with `bun run test`.
+After any deploy, run the live checks in `deploy/README.md` ("Verification after deploy").
 
 ## Generate a big synthetic export (load testing)
 
@@ -472,8 +532,10 @@ uploaded twice — 572,946 rows inserted, then 0 inserted / 572,946 duplicates.
 The image runs `next start` on node 22 as the non-root `node` user (uid 1000) on port 3040. The
 database lives on the host at `./data/health.db` and is bind-mounted to `/data` in the container.
 Auth is mandatory for the UI: copy `.env.example` to `.env` (git-ignored) and set
-`HEALTHVAULT_PASSWORD_HASH` and `HEALTHVAULT_SESSION_SECRET`, or the container exits at boot.
-Agent clients need no token.
+`HEALTHVAULT_PASSWORD_HASH` and `HEALTHVAULT_SESSION_SECRET` (for example via
+`bun run password:set`); configure `HEALTHVAULT_ALLOWED_HOSTS` with the exact browser/client host.
+The project `.env` includes the agent token for the container; the MCP process can read the synced
+private file at `~/.config/healthvault/agent.token`.
 
 ```bash
 cp .env.example .env && $EDITOR .env

@@ -13,6 +13,8 @@ import {
   stepsDaily,
 } from "@/db/queries";
 import { healthvaultContext } from "@/lib/services/context";
+import { hasWheyAction } from "@/lib/services/whey";
+import { WheyLogButtons } from "@/components/supplements/whey-forms";
 import { compact, instant, num, plural } from "@/lib/format";
 import { formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
 import { dayHeading, daysBetween } from "@/lib/day";
@@ -43,6 +45,7 @@ function TodayCard({ label, value, hint }: { label: string; value: string; hint:
 
 export default function DashboardPage() {
   const context = healthvaultContext();
+  const canUndoWhey = hasWheyAction(context.today);
   const totals = context.data.counts;
   const timezone = context.timezone;
 
@@ -159,11 +162,19 @@ export default function DashboardPage() {
             }
           />
         </div>
+        {context.profile.wheyLink || canUndoWhey ? (
+          <WheyLogButtons
+            configured={context.profile.wheyLink !== null}
+            canUndo={canUndoWhey}
+          />
+        ) : null}
         <p className="text-xs text-muted-foreground">
           {lastUpload
             ? `Last import ${instant(lastUpload.finishedAtMs, timezone)} · ${plural(lastUpload.inserted, "new row")}`
             : "No import yet"}
-          {context.data.lastRecordDay ? ` · latest data ${context.data.lastRecordDay}` : ""}
+          {context.data.lastRecordDay || context.data.lastWorkoutDay
+            ? ` · Apple data through ${context.data.lastRecordDay ?? "—"} · workouts through ${context.data.lastWorkoutDay ?? "—"}`
+            : ""}
         </p>
       </section>
 

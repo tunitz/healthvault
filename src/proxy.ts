@@ -1,11 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, verifySession } from "@/lib/auth";
+import { SESSION_COOKIE, agentRequestFailure, verifySession } from "@/lib/auth";
 
 /**
  * Pages and endpoints reachable without a session. Everything else needs a valid hv_session
- * cookie. /api/agent/* is intentionally NOT here: it is a credential-less machine surface and
- * is served only on the trusted LAN (never port-forwarded).
+ * cookie. The agent surface has its own bearer-token/session and Host/Origin gate below.
  */
 const PUBLIC_EXACT = new Set([
   "/login",
@@ -81,9 +80,15 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") || "/" : pathname;
 
-  // Credential-less machine surface — never demand a cookie here.
   if (isAgentPath(path)) {
-    return nextWithHeaders(request, requestHeaders, csp);
+    const failure = agentRequestFailure(request);
+    if (failure) {
+      return withPolicy(NextResponse.json({ error: failure.error }, { status: failure.status }), csp);
+    }
+    const response = nextWithHeaders(request, requestHeaders, csp);
+    response.headers.set("Cache-Control", "private, no-store");
+    response.headers.set("Vary", "Cookie, Authorization, Origin");
+    return response;
   }
 
   if (isPublic(path)) {

@@ -36,6 +36,20 @@
       "when": 1794413286621,
       "tag": "0004_ingredient_snapshots_history",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794450133634,
+      "tag": "0005_magenta_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794536533634,
+      "tag": "0006_whey_action_association",
+      "breakpoints": true
     }
   ]
 }

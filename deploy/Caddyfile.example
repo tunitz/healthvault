@@ -4,6 +4,7 @@
 # put Caddy (or any TLS terminator) in front for anything beyond a fully trusted
 # network. With TLS in front, set HEALTHVAULT_COOKIE_SECURE=1 in
 # ~/.config/healthvault/auth.env so the session cookie is Secure-only.
+# Add the exact site hostname here to HEALTHVAULT_ALLOWED_HOSTS in auth.env.
 #
 # Usage:
 #   caddy run --config /path/to/Caddyfile

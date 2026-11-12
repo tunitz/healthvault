@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ageOf, getProfile, getTimezone, workSchedule } from "@/lib/services/profile";
+import { ageOf, getProfile, getTimezone, trainingGoal, workSchedule } from "@/lib/services/profile";
 import {
   latestMeasurement,
   measurementHistory,
@@ -45,6 +45,7 @@ export default function ProfilePage() {
   const today = currentDay();
   const age = ageOf(profile, today);
   const schedule = workSchedule(profile);
+  const goal = trainingGoal(profile);
   const history = measurementHistory("weight", 3650);
   const table = [...history].reverse().slice(0, 60);
 
@@ -64,7 +65,7 @@ export default function ProfilePage() {
             <p className="text-xs text-muted-foreground">Height {formatHeight(profile.heightCm, units)}</p>
           ) : null}
         </div>
-        <ProfileForm profile={profile} age={age} units={units} />
+        <ProfileForm profile={profile} age={age} units={units} goalSeconds={goal.targetSeconds} />
       </section>
 
       <section className="flex flex-col gap-4">

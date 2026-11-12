@@ -1,9 +1,15 @@
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { foodLog, foodLogIngredients, foods, recipeIngredients, recipes } from "@/db/schema";
 import { resolveMeasureGrams } from "@/lib/services/measures";
 import type { Macros } from "@/lib/services/nutrition";
-import { fail, idField, numField, str } from "@/lib/validate";
+import {
+  amountBasisField,
+  computeRecipeServing,
+  servingFractionField,
+  type RecipeServingIngredient,
+} from "@/lib/services/recipe-serving";
+import { boolField, fail, idField, numField, str } from "@/lib/validate";
 
 /**
  * Recipes: a named composite dish with ingredient rows.
@@ -114,6 +120,72 @@ function normalizeIngredient(raw: unknown, index: number): NormalizedIngredient 
   };
 }
 
+type IngredientRowLike = {
+  id: number;
+  foodId: number | null;
+  name: string | null;
+  grams: number;
+  measureJson: string | null;
+};
+
+type FoodRow = typeof foods.$inferSelect;
+
+function parseStoredMeasure(json: string | null): { name: string; count: number } | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as { name?: unknown; count?: unknown };
+    if (typeof parsed.name === "string" && typeof parsed.count === "number") {
+      return { name: parsed.name, count: parsed.count };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveIngredientRow(row: IngredientRowLike, food: FoodRow | null | undefined): ResolvedIngredient {
+  const factor = row.grams / 100;
+  // A name-only (or dangling) ingredient keeps its grams but contributes no invented nutrition;
+  // it is exposed via `resolved: false` and makes the recipe/log estimated.
+  const resolved = Boolean(food);
+  const per100g: Macros | null = food
+    ? {
+        kcal: food.kcalPer100g,
+        proteinG: food.proteinPer100g,
+        carbsG: food.carbsPer100g,
+        fatG: food.fatPer100g,
+        fibreG: food.fibrePer100g,
+        sodiumMg: food.sodiumPer100g,
+      }
+    : null;
+  const macros: Macros = food
+    ? {
+        kcal: food.kcalPer100g * factor,
+        proteinG: food.proteinPer100g * factor,
+        carbsG: food.carbsPer100g * factor,
+        fatG: food.fatPer100g * factor,
+        fibreG: food.fibrePer100g * factor,
+        sodiumMg: food.sodiumPer100g * factor,
+      }
+    : { ...EMPTY_MACROS };
+  return {
+    id: row.id,
+    foodId: row.foodId,
+    name: row.name,
+    grams: row.grams,
+    measure: parseStoredMeasure(row.measureJson),
+    resolved,
+    per100g,
+    state: food?.state ?? null,
+    yieldFactor: food?.yieldFactor ?? null,
+    brand: food?.brand ?? null,
+    source: food?.source ?? null,
+    sourceUrl: food?.sourceUrl ?? null,
+    sourceDate: food?.sourceDate ?? null,
+    macros,
+  };
+}
+
 function resolveIngredients(recipeId: number): ResolvedIngredient[] {
   const rows = db
     .select()
@@ -124,57 +196,7 @@ function resolveIngredients(recipeId: number): ResolvedIngredient[] {
 
   return rows.map((row) => {
     const food = row.foodId === null ? null : db.select().from(foods).where(eq(foods.id, row.foodId)).get();
-    const factor = row.grams / 100;
-    // A name-only (or dangling) ingredient keeps its grams but contributes no invented nutrition;
-    // it is exposed via `resolved: false` and makes the recipe/log estimated.
-    const resolved = Boolean(food);
-    const per100g: Macros | null = food
-      ? {
-          kcal: food.kcalPer100g,
-          proteinG: food.proteinPer100g,
-          carbsG: food.carbsPer100g,
-          fatG: food.fatPer100g,
-          fibreG: food.fibrePer100g,
-          sodiumMg: food.sodiumPer100g,
-        }
-      : null;
-    const macros: Macros = food
-      ? {
-          kcal: food.kcalPer100g * factor,
-          proteinG: food.proteinPer100g * factor,
-          carbsG: food.carbsPer100g * factor,
-          fatG: food.fatPer100g * factor,
-          fibreG: food.fibrePer100g * factor,
-          sodiumMg: food.sodiumPer100g * factor,
-        }
-      : { ...EMPTY_MACROS };
-    let measure: { name: string; count: number } | null = null;
-    if (row.measureJson) {
-      try {
-        const parsed = JSON.parse(row.measureJson) as { name?: unknown; count?: unknown };
-        if (typeof parsed.name === "string" && typeof parsed.count === "number") {
-          measure = { name: parsed.name, count: parsed.count };
-        }
-      } catch {
-        measure = null;
-      }
-    }
-    return {
-      id: row.id,
-      foodId: row.foodId,
-      name: row.name,
-      grams: row.grams,
-      measure,
-      resolved,
-      per100g,
-      state: food?.state ?? null,
-      yieldFactor: food?.yieldFactor ?? null,
-      brand: food?.brand ?? null,
-      source: food?.source ?? null,
-      sourceUrl: food?.sourceUrl ?? null,
-      sourceDate: food?.sourceDate ?? null,
-      macros,
-    };
+    return resolveIngredientRow(row, food);
   });
 }
 
@@ -263,6 +285,224 @@ export function getRecipe(id: unknown): RecipeDetail {
     remainingServings: Math.max(0, recipe.servingsTotal - (used?.count ?? 0)),
     loggedServings: logged,
     archived: recipe.archivedAtMs !== null,
+  };
+}
+
+export type RecipeListItem = {
+  id: number;
+  name: string;
+  servingsTotal: number;
+  updatedAtMs: number;
+  archived: boolean;
+  complete: boolean;
+  unresolvedCount: number;
+};
+
+export type RecipeList = {
+  items: RecipeListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+/**
+ * Bounded, paginated recipe search. Archived recipes are history and are hidden unless asked for.
+ * `complete` is computed from the live ingredient rows so a name-only (or dangling) ingredient is
+ * never presented as known nutrition; a recipe with no ingredients is incomplete for the same
+ * reason.
+ */
+export function listRecipes(input: Record<string, unknown> = {}): RecipeList {
+  const query = str(input.query, "query", { max: 120 });
+  const includeArchived = boolField(input.includeArchived, "includeArchived") ?? false;
+  const requestedLimit = numField(input.limit ?? 20, "limit", { integer: true, min: 0, max: 1_000_000 }) ?? 20;
+  const limit = Math.min(Math.max(1, Math.trunc(requestedLimit)), 100);
+  const offset = Math.max(
+    0,
+    Math.trunc(numField(input.offset ?? 0, "offset", { integer: true, min: 0, max: 1_000_000 }) ?? 0),
+  );
+
+  const conditions = [];
+  if (!includeArchived) conditions.push(isNull(recipes.archivedAtMs));
+  if (query) conditions.push(like(recipes.name, `%${query.replace(/[%_]/g, "")}%`));
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const rows = db
+    .select({
+      id: recipes.id,
+      name: recipes.name,
+      servingsTotal: recipes.servingsTotal,
+      updatedAtMs: recipes.updatedAtMs,
+      archivedAtMs: recipes.archivedAtMs,
+      ingredientCount: sql<number>`count(${recipeIngredients.id})`,
+      unresolvedCount: sql<number>`coalesce(sum(case when ${recipeIngredients.id} is not null and ${foods.id} is null then 1 else 0 end), 0)`,
+    })
+    .from(recipes)
+    .leftJoin(recipeIngredients, eq(recipeIngredients.recipeId, recipes.id))
+    .leftJoin(foods, eq(foods.id, recipeIngredients.foodId))
+    .where(where)
+    .groupBy(recipes.id)
+    .orderBy(desc(recipes.updatedAtMs), desc(recipes.id))
+    .limit(limit)
+    .offset(offset)
+    .all();
+
+  const total = db
+    .select({ count: sql<number>`count(*)` })
+    .from(recipes)
+    .where(where)
+    .get();
+
+  return {
+    items: rows.map((row) => {
+      const ingredientCount = Number(row.ingredientCount);
+      const unresolvedCount = Number(row.unresolvedCount);
+      return {
+        id: row.id,
+        name: row.name,
+        servingsTotal: row.servingsTotal,
+        updatedAtMs: row.updatedAtMs,
+        archived: row.archivedAtMs !== null,
+        complete: ingredientCount > 0 && unresolvedCount === 0,
+        unresolvedCount,
+      };
+    }),
+    total: total?.count ?? 0,
+    limit,
+    offset,
+  };
+}
+
+/**
+ * Resolve a not-yet-saved recipe draft exactly as `createRecipe` would validate it, without any
+ * write. Ingredient ids are synthetic negatives (a draft has no rows yet); overrides on a draft
+ * should therefore match by `foodId`.
+ */
+function resolveDraftIngredients(draft: Record<string, unknown>): ResolvedIngredient[] {
+  const raw = draft.ingredients;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) fail("draft.ingredients must be an array");
+  if (raw.length > 100) fail("at most 100 ingredients per recipe");
+  return raw.map((value, index) => {
+    const ingredient = normalizeIngredient(value, index);
+    const food = ingredient.foodId === null ? null : foodRow(ingredient.foodId);
+    return resolveIngredientRow(
+      {
+        id: -(index + 1),
+        foodId: ingredient.foodId,
+        name: ingredient.name,
+        grams: ingredient.grams,
+        measureJson: ingredient.measureJson,
+      },
+      food,
+    );
+  });
+}
+
+export type RecipeServingPreview = {
+  recipeId: number | null;
+  name: string;
+  servingsTotal: number;
+  servingFraction: number;
+  amountBasis: "batch" | "serving" | null;
+  complete: boolean;
+  archived: boolean;
+  unresolvedIngredients: string[];
+  ingredients: RecipeServingIngredient[];
+  /** Whole-recipe totals (the editor's "batch" view), with overrides applied to the batch. */
+  batch: { grams: number; macros: Macros };
+  /**
+   * The portion selected by `servingFraction` (one serving when servingFraction = 1). This is
+   * exactly what `logRecipe` would save as the aggregate row.
+   */
+  total: { grams: number; rawEquivalentGrams: number; macros: Macros };
+  perServing: { grams: number; macros: Macros };
+};
+
+/**
+ * Read-only preview of one recipe serving (or a draft), using the same arithmetic as `logRecipe`.
+ *
+ * This performs no writes: no `food_log`, ingredient, revision or recipe row is touched. `draft`
+ * lets the recipe editor calculate live totals before the recipe exists. Passing `overrides` (the
+ * same shape as `ingredientOverrides`) requires an explicit `amountBasis`, exactly as logging does.
+ */
+export function previewRecipeServing(input: Record<string, unknown>): RecipeServingPreview {
+  const hasRecipeId =
+    input.recipeId !== undefined && input.recipeId !== null && input.recipeId !== "";
+  const hasDraft = input.draft !== undefined && input.draft !== null && input.draft !== "";
+  if (hasRecipeId === hasDraft) {
+    fail("previewRecipeServing needs exactly one of recipeId or draft");
+  }
+
+  let recipeId: number | null = null;
+  let name: string;
+  let servingsTotal: number;
+  let ingredients: ResolvedIngredient[];
+  let archived = false;
+
+  if (hasRecipeId) {
+    recipeId = idField(input.recipeId, "recipeId");
+    const totals = recipeTotals(recipeId);
+    name = totals.recipe.name;
+    servingsTotal = totals.recipe.servingsTotal;
+    ingredients = totals.ingredients;
+    archived = totals.recipe.archivedAtMs !== null;
+  } else {
+    if (!input.draft || typeof input.draft !== "object" || Array.isArray(input.draft)) {
+      fail("draft must be an object");
+    }
+    const draft = input.draft as Record<string, unknown>;
+    name = str(draft.name, "draft.name", { max: 200 }) ?? "Draft recipe";
+    servingsTotal = numField(draft.servings ?? draft.servingsTotal ?? 2, "draft.servings", {
+      required: true,
+      integer: true,
+      min: 1,
+      max: 100,
+    })!;
+    ingredients = resolveDraftIngredients(draft);
+  }
+
+  const servingFraction = servingFractionField(input.servingFraction);
+  const amountBasis = amountBasisField(input.amountBasis);
+  // `overrides` is the plan's short name; `ingredientOverrides` matches `logRecipe`/the API.
+  const rawOverrides =
+    input.overrides !== undefined ? input.overrides : input.ingredientOverrides;
+  const computation = computeRecipeServing({
+    recipeId,
+    servingsTotal,
+    ingredients,
+    rawOverrides,
+    amountBasis,
+    servingFraction,
+    weightSource: "counted",
+  });
+
+  return {
+    recipeId,
+    name,
+    servingsTotal,
+    servingFraction,
+    amountBasis: computation.amountBasis,
+    complete: computation.ingredients.length > 0 && !computation.incomplete,
+    archived,
+    unresolvedIngredients: computation.unresolvedIngredients,
+    ingredients: computation.ingredients,
+    batch: computation.batch,
+    total: {
+      grams: computation.totalGrams,
+      rawEquivalentGrams: computation.totalRawEquivalentGrams,
+      macros: computation.totalMacros,
+    },
+    perServing: {
+      grams: computation.perServing.grams,
+      macros: {
+        kcal: computation.perServing.kcal,
+        proteinG: computation.perServing.proteinG,
+        carbsG: computation.perServing.carbsG,
+        fatG: computation.perServing.fatG,
+        fibreG: computation.perServing.fibreG,
+        sodiumMg: computation.perServing.sodiumMg,
+      },
+    },
   };
 }
 

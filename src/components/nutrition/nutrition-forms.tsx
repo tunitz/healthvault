@@ -14,7 +14,7 @@ import { num } from "@/lib/format";
 import type { Food, Targets } from "@/lib/services/nutrition";
 
 const SELECT =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "h-8 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const MEALS = [
   { value: "breakfast", label: "Breakfast" },
@@ -61,7 +61,7 @@ export function QuickAddForm({ day }: { day: string }) {
           </Field>
         </div>
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">More macros</summary>
+          <summary className="cursor-pointer py-3.5 text-xs text-muted-foreground sm:py-0">More macros</summary>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <Field label="Carbs (g)">
               <Input name="carbsG" type="number" inputMode="decimal" step="0.1" min="0" defaultValue="0" />
@@ -77,7 +77,7 @@ export function QuickAddForm({ day }: { day: string }) {
             </Field>
           </div>
         </details>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0">
           <input type="checkbox" name="estimated" defaultChecked className="size-4 accent-[var(--primary)]" />
           Macros are estimated
         </label>
@@ -167,7 +167,7 @@ export function RecentFoods({
             key={`${food.name}-${food.foodId ?? "raw"}`}
             className="flex min-w-0 items-baseline gap-1"
           >
-            <span className="truncate text-foreground">{food.name}</span>
+            <span className="min-w-0 truncate text-foreground">{food.name}</span>
             <span className="num shrink-0 text-muted-foreground">
               {num(food.grams, 0)} g · {num(food.kcal, 0)} kcal
             </span>
@@ -209,7 +209,7 @@ export function NewFoodForm() {
           </Field>
         </div>
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">More per 100g</summary>
+          <summary className="cursor-pointer py-3.5 text-xs text-muted-foreground sm:py-0">More per 100g</summary>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <Field label="Fibre (g)">
               <Input name="fibreG" type="number" inputMode="decimal" step="0.1" min="0" defaultValue="0" />
@@ -255,7 +255,7 @@ export function TargetsForm({ day, targets }: { day: string; targets: Targets })
           </Field>
         </div>
         <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">More targets</summary>
+          <summary className="cursor-pointer py-3.5 text-xs text-muted-foreground sm:py-0">More targets</summary>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <Field label="Fibre (g)">
               <Input name="fibreG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.fibreG)} />

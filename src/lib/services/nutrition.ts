@@ -21,11 +21,16 @@ import {
   totalsFromIngredients,
   withIngredientSnapshots,
   writeRevision,
-  type IngredientSnapshotInput,
   type LoggedIngredient,
   type LoggedIngredientEntry,
 } from "@/lib/services/food-log-snapshots";
 import { recipeTotals } from "@/lib/services/recipes";
+import {
+  amountBasisField,
+  basisGrams,
+  computeRecipeServing,
+  servingFractionField,
+} from "@/lib/services/recipe-serving";
 import { dayField, enumField, fail, idField, numField, str } from "@/lib/validate";
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"] as const;
@@ -52,7 +57,14 @@ export type Macros = {
 
 export type Targets = Macros & { effectiveFrom: string; source: "manual" | "suggested" };
 export type Food = typeof foods.$inferSelect;
-export type FoodEntry = typeof foodLog.$inferSelect;
+export type FoodEntry = Omit<typeof foodLog.$inferSelect, "wheyActionJson" | "wheyActionDay">;
+
+function publicFoodEntry(row: typeof foodLog.$inferSelect): FoodEntry {
+  const { wheyActionJson: _wheyActionJson, wheyActionDay: _wheyActionDay, ...entry } = row;
+  void _wheyActionJson;
+  void _wheyActionDay;
+  return entry;
+}
 
 const EMPTY: Macros = { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, fibreG: 0, sodiumMg: 0 };
 
@@ -113,6 +125,46 @@ function providedMacros(input: Record<string, unknown>): Partial<Macros> {
 function per100Macros(input: Record<string, unknown>): Macros {
   const nested = (input.per100g ?? input.per100 ?? {}) as Record<string, unknown>;
   return macrosOf({ ...input, ...nested }, { required: true });
+}
+
+/**
+ * Only the per-100 g fields the caller supplied. An edit must never zero a macro the form omitted;
+ * nested `per100g` values take precedence over top-level aliases, as in `addFood`.
+ */
+function providedPer100Macros(input: Record<string, unknown>): Partial<Macros> {
+  const nestedRaw = input.per100g ?? input.per100;
+  if (
+    nestedRaw !== undefined &&
+    nestedRaw !== null &&
+    (typeof nestedRaw !== "object" || Array.isArray(nestedRaw))
+  ) {
+    fail("per100g must be an object");
+  }
+  const sources: Record<string, unknown>[] = [];
+  if (nestedRaw !== undefined && nestedRaw !== null) sources.push(nestedRaw as Record<string, unknown>);
+  sources.push(input);
+  const fields: [keyof Macros, string[]][] = [
+    ["kcal", ["kcal", "calories"]],
+    ["proteinG", ["proteinG", "protein"]],
+    ["carbsG", ["carbsG", "carbs", "carbohydrateG"]],
+    ["fatG", ["fatG", "fat"]],
+    ["fibreG", ["fibreG", "fiberG", "fibre", "fiber"]],
+    ["sodiumMg", ["sodiumMg", "sodium"]],
+  ];
+  const out: Partial<Macros> = {};
+  for (const [key, names] of fields) {
+    for (const source of sources) {
+      const name = names.find(
+        (candidate) =>
+          candidate in source && source[candidate] !== undefined && source[candidate] !== null && source[candidate] !== "",
+      );
+      if (name !== undefined) {
+        out[key] = numField(source[name], names[0], { min: 0, max: 100_000 })!;
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -226,6 +278,49 @@ export function searchFoods(query: unknown, limit = 20): FoodWithMeasures[] {
         .limit(capped)
         .all();
   return rows.map((row) => foodWithMeasures(row, defaults));
+}
+
+export type FoodList = {
+  items: FoodWithMeasures[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+/**
+ * Bounded, paginated food search for the library UI. `searchFoods` stays as the agent contract;
+ * this adds the total and offset the page needs, with the same name/brand matching and ordering.
+ */
+export function listFoods(input: Record<string, unknown> = {}): FoodList {
+  const query = str(input.query, "query", { max: 120 });
+  const requestedLimit = numField(input.limit ?? 20, "limit", { integer: true, min: 0, max: 1_000_000 }) ?? 20;
+  const limit = Math.min(Math.max(1, Math.trunc(requestedLimit)), 100);
+  const offset = Math.max(
+    0,
+    Math.trunc(numField(input.offset ?? 0, "offset", { integer: true, min: 0, max: 1_000_000 }) ?? 0),
+  );
+  const conditions = [];
+  if (query) {
+    const pattern = `%${query.replace(/[%_]/g, "")}%`;
+    conditions.push(or(like(foods.name, pattern), like(foods.brand, pattern))!);
+  }
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const defaults = measureDefaults();
+  const rows = db
+    .select()
+    .from(foods)
+    .where(where)
+    .orderBy(desc(foods.updatedAtMs), desc(foods.id))
+    .limit(limit)
+    .offset(offset)
+    .all();
+  const total = db.select({ count: sql<number>`count(*)` }).from(foods).where(where).get();
+  return {
+    items: rows.map((row) => foodWithMeasures(row, defaults)),
+    total: total?.count ?? 0,
+    limit,
+    offset,
+  };
 }
 
 export function getFood(id: unknown): Food {
@@ -358,6 +453,96 @@ export function addFood(input: Record<string, unknown>): FoodWithMeasures {
   return foodWithMeasures(row);
 }
 
+/**
+ * Edit a saved food by id, mirroring `addFood`'s validation but keyed by the row.
+ *
+ * Only supplied fields change, so an edit form that does not include an optional value cannot
+ * blank it. A rename is allowed, but the `(name, brand)` pair must stay unique across other rows
+ * (the table's unique index would otherwise surface as a 500). Every actual definition change is
+ * written to `food_revisions`; already-logged meals remain untouched.
+ */
+export function updateFood(id: unknown, input: Record<string, unknown>): FoodWithMeasures {
+  const foodId = idField(id);
+  const existing = getFood(foodId);
+  const now = Date.now();
+
+  const name = "name" in input ? str(input.name, "name", { required: true, max: 200 })! : existing.name;
+  const brand = "brand" in input ? str(input.brand, "brand", { max: 200 }) : existing.brand;
+  const collision = db
+    .select({ id: foods.id })
+    .from(foods)
+    .where(
+      and(
+        eq(foods.name, name),
+        brand === null ? sql`${foods.brand} IS NULL` : eq(foods.brand, brand),
+        sql`${foods.id} <> ${foodId}`,
+      ),
+    )
+    .get();
+  if (collision) {
+    fail("another food already uses that name and brand; choose a different name or brand", 409);
+  }
+
+  const macros = providedPer100Macros(input);
+  const servingGrams =
+    "servingGrams" in input
+      ? numField(input.servingGrams, "servingGrams", { required: true, min: 1, max: 10_000 })!
+      : existing.servingGrams;
+  const state =
+    input.state === undefined || input.state === null || input.state === ""
+      ? existing.state
+      : enumField(input.state, "state", FOOD_STATES)!;
+  const yieldFactor =
+    input.yieldFactor === undefined || input.yieldFactor === null || input.yieldFactor === ""
+      ? existing.yieldFactor
+      : numField(input.yieldFactor, "yieldFactor", { required: true, min: 0.01, max: 10 })!;
+
+  const row = db
+    .update(foods)
+    .set({
+      name,
+      brand,
+      barcode: input.barcode === undefined ? existing.barcode : str(input.barcode, "barcode", { max: 64 }),
+      servingGrams,
+      kcalPer100g: macros.kcal ?? existing.kcalPer100g,
+      proteinPer100g: macros.proteinG ?? existing.proteinPer100g,
+      carbsPer100g: macros.carbsG ?? existing.carbsPer100g,
+      fatPer100g: macros.fatG ?? existing.fatPer100g,
+      fibrePer100g: macros.fibreG ?? existing.fibrePer100g,
+      sodiumPer100g: macros.sodiumMg ?? existing.sodiumPer100g,
+      state,
+      yieldFactor,
+      measuresJson: measuresJsonFromInput(input, existing),
+      extraJson: input.extra === undefined ? existing.extraJson : JSON.stringify(input.extra),
+      source: typeof input.source === "string" ? input.source : existing.source,
+      sourceUrl:
+        input.sourceUrl === undefined ? existing.sourceUrl : str(input.sourceUrl, "sourceUrl", { max: 500 }),
+      sourceDate: sourceDateField(input.sourceDate, existing.sourceDate),
+      updatedAtMs: now,
+    })
+    .where(eq(foods.id, foodId))
+    .returning()
+    .get()!;
+  recordFoodRevision(existing, row, now);
+  return foodWithMeasures(row);
+}
+
+export type FoodRevision = typeof foodRevisions.$inferSelect;
+
+/**
+ * The audit trail for one food definition, newest first. No FK backs `food_id`, so an unused food
+ * that was later deleted leaves its revisions readable.
+ */
+export function getFoodRevisions(foodId: unknown): FoodRevision[] {
+  const id = idField(foodId, "foodId");
+  return db
+    .select()
+    .from(foodRevisions)
+    .where(eq(foodRevisions.foodId, id))
+    .orderBy(desc(foodRevisions.createdAtMs), desc(foodRevisions.id))
+    .all();
+}
+
 export function deleteFood(id: unknown): { deleted: boolean } {
   const foodId = idField(id);
   const used = sqlite.prepare("SELECT COUNT(*) AS c FROM food_log WHERE food_id = ?").get(foodId) as { c: number };
@@ -412,33 +597,6 @@ export function applyFoodTemplate(
     .get()!;
   recordFoodRevision(existing, row, now);
   return foodWithMeasures(row);
-}
-
-/**
- * Convert a weighed amount to the food's macro basis. `yieldFactor` is cooked g per raw g for a
- * raw-basis food (0.75 chicken breast) and cooked g per dry g for a dry-basis food (2.3 rice).
- * A factor of 1.0 means the food never declared a conversion, so a mismatched state is an error
- * rather than a silently 30%-wrong entry.
- */
-function basisGrams(
-  grams: number,
-  weighedAs: FoodState,
-  basisState: FoodState,
-  yieldFactor: number,
-  label: string,
-): number {
-  if (weighedAs === basisState || basisState === "none") return grams;
-  const factor = Number.isFinite(yieldFactor) && yieldFactor > 0 ? yieldFactor : 1;
-  if (factor === 1) {
-    fail(
-      `${label}: cannot convert ${weighedAs} grams to the food's ${basisState} basis because yieldFactor is 1.0; set yieldFactor on the food or send gramsAs ${basisState}`,
-    );
-  }
-  if (basisState === "raw" && weighedAs === "cooked") return grams / factor;
-  if (basisState === "cooked" && weighedAs === "raw") return grams * factor;
-  if (basisState === "dry" && (weighedAs === "cooked" || weighedAs === "rehydrated")) return grams / factor;
-  if (basisState === "rehydrated" && weighedAs === "dry") return grams * factor;
-  fail(`${label}: cannot convert ${weighedAs} grams to a ${basisState} basis with yieldFactor ${factor}`);
 }
 
 /**
@@ -638,7 +796,7 @@ function insertEntry(value: typeof foodLog.$inferInsert): FoodEntry {
         .returning()
         .get();
       if (!row) fail("meal entry was not written", 500);
-      return row;
+      return publicFoodEntry(row);
     } catch (e) {
       const unique = e instanceof Error && /UNIQUE constraint failed/i.test(e.message);
       if (!unique || attempt >= 5) throw e;
@@ -723,103 +881,6 @@ export type RecipeLogResult = {
   ingredients: LoggedIngredient[];
 };
 
-type ParsedOverride = {
-  ingredientId: number | null;
-  foodId: number | null;
-  grams: number | null;
-  /** Raw measure input; resolved against the matched food's own measures later. */
-  measureInput: unknown;
-  gramsAs: FoodState | null;
-};
-
-/**
- * Parse `ingredientOverrides` before touching the database.
- *
- * `amountBasis` is required whenever overrides are sent: `batch` means the grams are for the
- * whole recipe (divided by servings), `serving` means the grams are already one serving. Making
- * the caller state it prevents an ambiguous 2x/0.5x interpretation of the same number.
- */
-function parseOverrides(raw: unknown, amountBasis: "batch" | "serving" | null): ParsedOverride[] {
-  if (raw === undefined || raw === null) return [];
-  if (!Array.isArray(raw)) fail("ingredientOverrides must be an array");
-  if (raw.length === 0) return [];
-  if (raw.length > 100) fail("at most 100 ingredient overrides per log");
-  if (amountBasis === null) {
-    fail("amountBasis is required with ingredientOverrides: use 'batch' (whole recipe) or 'serving' (one serving)");
-  }
-  return raw.map((value, index) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      fail(`ingredientOverrides[${index}] must be an object`);
-    }
-    const input = value as Record<string, unknown>;
-    const hasIngredientId =
-      input.ingredientId !== undefined && input.ingredientId !== null && input.ingredientId !== "";
-    const hasFoodId = input.foodId !== undefined && input.foodId !== null && input.foodId !== "";
-    if (!hasIngredientId && !hasFoodId) {
-      fail(`ingredientOverrides[${index}] needs ingredientId or foodId`);
-    }
-    const ingredientId = hasIngredientId
-      ? idField(input.ingredientId, `ingredientOverrides[${index}].ingredientId`)
-      : null;
-    const foodId = hasFoodId ? idField(input.foodId, `ingredientOverrides[${index}].foodId`) : null;
-    const grams = numField(input.grams, `ingredientOverrides[${index}].grams`, {
-      min: 0.1,
-      max: 20_000,
-    });
-    const measureInput =
-      input.measure === undefined || input.measure === null ? null : input.measure;
-    if (grams === null && measureInput === null) {
-      fail(`ingredientOverrides[${index}] needs grams or measure`);
-    }
-    if (grams !== null && measureInput !== null) {
-      fail(`ingredientOverrides[${index}] must use grams or measure, not both`);
-    }
-    const gramsAs =
-      input.gramsAs === undefined || input.gramsAs === null || input.gramsAs === ""
-        ? null
-        : (enumField(input.gramsAs, `ingredientOverrides[${index}].gramsAs`, WEIGHED_STATES)! as FoodState);
-    return { ingredientId, foodId, grams, measureInput, gramsAs };
-  });
-}
-
-/** Map overrides onto the recipe's ingredient list, rejecting duplicates and ambiguity. */
-function matchOverrides(
-  overrides: ParsedOverride[],
-  ingredients: ReturnType<typeof recipeTotals>["ingredients"],
-): Map<number, ParsedOverride> {
-  const matched = new Map<number, ParsedOverride>();
-  for (const [index, override] of overrides.entries()) {
-    const candidates = ingredients.filter((ingredient) => {
-      if (override.ingredientId !== null) return ingredient.id === override.ingredientId;
-      return override.foodId !== null && ingredient.foodId === override.foodId;
-    });
-    if (candidates.length === 0) {
-      fail(
-        override.ingredientId !== null
-          ? `ingredientOverrides[${index}]: ingredient ${override.ingredientId} is not in this recipe`
-          : `ingredientOverrides[${index}]: food ${override.foodId} is not in this recipe`,
-        404,
-      );
-    }
-    if (candidates.length > 1) {
-      fail(
-        `ingredientOverrides[${index}]: food ${override.foodId} appears more than once; use ingredientId to choose one`,
-      );
-    }
-    const ingredient = candidates[0];
-    if (override.ingredientId !== null && override.foodId !== null && ingredient.foodId !== override.foodId) {
-      fail(
-        `ingredientOverrides[${index}]: ingredient ${override.ingredientId} is not food ${override.foodId}`,
-      );
-    }
-    if (matched.has(ingredient.id)) {
-      fail(`ingredientOverrides[${index}]: ingredient ${ingredient.id} is overridden more than once`);
-    }
-    matched.set(ingredient.id, override);
-  }
-  return matched;
-}
-
 /**
  * Log one serving of a recipe as an immutable `food_log` snapshot plus one
  * `food_log_ingredients` row per ingredient.
@@ -891,10 +952,7 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
     }
   }
 
-  const fraction =
-    input.servingFraction === undefined || input.servingFraction === null || input.servingFraction === ""
-      ? 1
-      : numField(input.servingFraction, "servingFraction", { required: true, min: 0.01, max: 100 })!;
+  const fraction = servingFractionField(input.servingFraction);
   const weightSource =
     input.weightSource === undefined || input.weightSource === null
       ? "counted"
@@ -902,118 +960,22 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
   const eatenAtMs = at ?? (entryDay === today ? now : localTimeMs(entryDay, "12:00", tz));
   const name = str(input.name, "name", { max: 200 }) ?? recipe.name;
 
-  const rawBasis = input.amountBasis;
-  const amountBasis: "batch" | "serving" | null =
-    rawBasis === undefined || rawBasis === null || rawBasis === ""
-      ? null
-      : (enumField(rawBasis, "amountBasis", ["batch", "serving"] as const) as "batch" | "serving");
-  const overrides = parseOverrides(input.ingredientOverrides, amountBasis);
-  if (overrides.length > 0 && amountBasis === null) {
-    // parseOverrides already fails, but keep the invariant local for TypeScript.
-    fail("amountBasis is required with ingredientOverrides");
-  }
-  if (overrides.length === 0 && amountBasis !== null) {
-    fail("amountBasis only applies with ingredientOverrides");
-  }
-  const effectiveBasis = overrides.length > 0 ? amountBasis : null;
-  const matched = matchOverrides(overrides, ingredients);
-  const divisor = recipe.servingsTotal > 0 ? recipe.servingsTotal : 1;
-
-  const snapshots: IngredientSnapshotInput[] = ingredients.map((ingredient, index) => {
-    const override = matched.get(ingredient.id);
-    let overrideGrams = override?.grams ?? null;
-    let overrideMeasure: { name: string; count: number } | null = null;
-    if (override && override.measureInput !== null) {
-      const food = ingredient.foodId === null ? null : getFood(ingredient.foodId);
-      const resolved = resolveMeasureGrams(
-        override.measureInput,
-        food?.measuresJson ?? null,
-        `ingredientOverrides for ingredient ${ingredient.id}`,
-      );
-      overrideGrams = resolved.grams;
-      overrideMeasure = { name: resolved.name, count: resolved.count };
-    }
-    let perServingGrams = ingredient.grams / divisor;
-    if (overrideGrams !== null) {
-      perServingGrams = effectiveBasis === "batch" ? overrideGrams / divisor : overrideGrams;
-    }
-    const gramsAs = override?.gramsAs ?? ((ingredient.state as FoodState | null) ?? "raw");
-    const basisState = (ingredient.state as FoodState | null) ?? "raw";
-    const yieldFactor = ingredient.yieldFactor ?? 1;
-    // Resolve the per-serving amount on the food's macro basis, then apply the serving fraction.
-    const perServingBasis = ingredient.resolved
-      ? basisGrams(perServingGrams, gramsAs, basisState, yieldFactor, `ingredient "${ingredient.name ?? ingredient.id}"`)
-      : perServingGrams;
-    const perServingMacros: Macros =
-      ingredient.per100g === null
-        ? { ...EMPTY }
-        : {
-            kcal: (ingredient.per100g.kcal * perServingBasis) / 100,
-            proteinG: (ingredient.per100g.proteinG * perServingBasis) / 100,
-            carbsG: (ingredient.per100g.carbsG * perServingBasis) / 100,
-            fatG: (ingredient.per100g.fatG * perServingBasis) / 100,
-            fibreG: (ingredient.per100g.fibreG * perServingBasis) / 100,
-            sodiumMg: (ingredient.per100g.sodiumMg * perServingBasis) / 100,
-          };
-    return {
-      recipeId,
-      recipeIngredientId: ingredient.id,
-      // A dangling food reference is not written to the child FK; the name/grams are kept and
-      // the ingredient is marked unresolved instead of failing the whole log.
-      foodId: ingredient.resolved ? ingredient.foodId : null,
-      name: ingredient.name ?? `ingredient ${ingredient.id}`,
-      position: index,
-      amountBasis: overrideGrams !== null ? effectiveBasis : "batch",
-      grams: perServingGrams * fraction,
-      perServingGrams,
-      measure: overrideMeasure ?? ingredient.measure,
-      gramsAs,
-      foodState: ingredient.state,
-      yieldFactor: ingredient.yieldFactor,
-      rawEquivalentGrams: perServingBasis * fraction,
-      per100g: ingredient.per100g,
-      macros: {
-        kcal: perServingMacros.kcal * fraction,
-        proteinG: perServingMacros.proteinG * fraction,
-        carbsG: perServingMacros.carbsG * fraction,
-        fatG: perServingMacros.fatG * fraction,
-        fibreG: perServingMacros.fibreG * fraction,
-        sodiumMg: perServingMacros.sodiumMg * fraction,
-      },
-      resolved: ingredient.resolved,
-      macroSource: ingredient.resolved ? (ingredient.source === "usda" ? "usda" : "label") : "estimated",
-      weightSource,
-      source: ingredient.source,
-      sourceUrl: ingredient.sourceUrl,
-      sourceDate: ingredient.sourceDate,
-    };
+  // The preview and the log share every ingredient, amount and macro calculation. This returns
+  // snapshots only; nothing is written until the transaction below.
+  const computation = computeRecipeServing({
+    recipeId,
+    servingsTotal: recipe.servingsTotal,
+    ingredients,
+    rawOverrides: input.ingredientOverrides,
+    amountBasis: amountBasisField(input.amountBasis),
+    servingFraction: fraction,
+    weightSource,
   });
-
-  const totalGrams = snapshots.reduce((sum, snapshot) => sum + snapshot.grams, 0);
-  const totalBasis = snapshots.reduce((sum, snapshot) => sum + snapshot.rawEquivalentGrams, 0);
-  const totalMacros = snapshots.reduce<Macros>(
-    (acc, snapshot) => ({
-      kcal: acc.kcal + snapshot.macros.kcal,
-      proteinG: acc.proteinG + snapshot.macros.proteinG,
-      carbsG: acc.carbsG + snapshot.macros.carbsG,
-      fatG: acc.fatG + snapshot.macros.fatG,
-      fibreG: acc.fibreG + snapshot.macros.fibreG,
-      sodiumMg: acc.sodiumMg + snapshot.macros.sodiumMg,
-    }),
-    { ...EMPTY },
-  );
-  const perServingSnapshot = {
-    grams: snapshots.reduce((sum, snapshot) => sum + snapshot.perServingGrams, 0),
-    kcal: totalMacros.kcal / fraction,
-    proteinG: totalMacros.proteinG / fraction,
-    carbsG: totalMacros.carbsG / fraction,
-    fatG: totalMacros.fatG / fraction,
-    fibreG: totalMacros.fibreG / fraction,
-    sodiumMg: totalMacros.sodiumMg / fraction,
-    estimated: incomplete,
-    snapshotVersion: 2,
-    ingredientCount: snapshots.length,
-  };
+  const snapshots = computation.snapshots;
+  const totalGrams = computation.totalGrams;
+  const totalBasis = computation.totalRawEquivalentGrams;
+  const totalMacros = computation.totalMacros;
+  const perServingSnapshot = computation.perServing;
 
   const entry = sqlite.transaction(() => {
     const row = insertEntry({
@@ -1059,7 +1021,7 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
     unresolvedIngredients: unresolved.map(
       (ingredient) => ingredient.name ?? `ingredient ${ingredient.id}`,
     ),
-    amountBasis: effectiveBasis,
+    amountBasis: computation.amountBasis,
     entry,
     ingredients: ingredientsForEntry(entry.id),
   };
@@ -1382,7 +1344,7 @@ export function updateEntry(id: unknown, input: Record<string, unknown>): FoodEn
           createdAtMs: now,
         });
       }
-      return row;
+      return publicFoodEntry(row);
     })();
   } catch (e) {
     // The unique key is (day, meal, eaten_at_ms, name). A move onto an occupied slot is a

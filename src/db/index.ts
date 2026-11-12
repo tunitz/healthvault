@@ -3,9 +3,11 @@ import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { resolveDatabasePath } from "./guard";
 import * as schema from "./schema";
 
-const file = process.env.DATABASE_PATH ?? join(process.cwd(), "data", "health.db");
+// Fails closed before anything is opened: a test process may never reach the live database.
+const file = resolveDatabasePath(process.env);
 const dir = dirname(file);
 const defaultDataDir = join(process.cwd(), "data");
 const dirExisted = existsSync(dir);

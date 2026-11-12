@@ -77,6 +77,10 @@ export const profile = sqliteTable("profile", {
   goalsNote: text("goals_note"),
   dietNote: text("diet_note"),
   activityNote: text("activity_note"),
+  /** Training goal, e.g. { type: "run5k", targetSeconds: 1800 }. Pace is derived on read. */
+  goalJson: text("goal_json"),
+  /** One-tap whey logging target: { foodId, supplementId: number | null, grams, meal }. */
+  wheyLinkJson: text("whey_link_json"),
   createdAtMs: integer("created_at_ms").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
 });
@@ -219,8 +223,15 @@ export const foodLog = sqliteTable(
     note: text("note"),
     createdAtMs: integer("created_at_ms").notNull(),
     updatedAtMs: integer("updated_at_ms").notNull(),
+    /** Immutable one-tap whey association and the prior supplement-log snapshot for Undo. */
+    wheyActionJson: text("whey_action_json"),
+    /** Non-null only for one-tap whey rows; unique per local day for concurrent duplicate guards. */
+    wheyActionDay: text("whey_action_day"),
   },
-  (t) => [uniqueIndex("uq_food_log_day_meal_at").on(t.day, t.meal, t.eatenAtMs, t.name)],
+  (t) => [
+    uniqueIndex("uq_food_log_day_meal_at").on(t.day, t.meal, t.eatenAtMs, t.name),
+    uniqueIndex("uq_food_log_whey_action_day").on(t.wheyActionDay),
+  ],
 );
 
 /**
@@ -346,8 +357,61 @@ export const supplementLogs = sqliteTable(
     unit: text("unit").notNull(),
     note: text("note"),
     createdAtMs: integer("created_at_ms").notNull(),
+    /** Set only by a linked one-tap whey action; manual upserts clear it. */
+    wheyActionId: text("whey_action_id"),
   },
   (t) => [uniqueIndex("uq_supplement_logs_day").on(t.supplementId, t.day)],
+);
+
+/**
+ * A planned training session. Planned rows are intent, never activity: they never enter
+ * workout volume or calorie totals. `workoutId` optionally points at the imported workout that
+ * fulfilled the session — that Apple row stays the single source of the actual effort.
+ */
+export const plannedSessions = sqliteTable(
+  "planned_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    day: text("day").notNull(), // local day
+    kind: text("kind").notNull(), // run | strength | rest | test
+    intent: text("intent"), // easy | quality | long_easy | test | strength
+    title: text("title").notNull(),
+    note: text("note"),
+    /** e.g. {"structure":"6 × 2 min comfortably hard / 2 min easy","distanceKm":5,"paceMinPerKm":6} */
+    targetJson: text("target_json"),
+    status: text("status").notNull().default("planned"), // planned | done | skipped
+    workoutId: integer("workout_id").references(() => workouts.id),
+    /** Identifies the generated block, so one unfinished block can be detected. */
+    blockStart: text("block_start"),
+    weekNo: integer("week_no"), // 1-based week within the block
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (t) => [index("idx_planned_sessions_day").on(t.day)],
+);
+
+/**
+ * Manually logged strength detail. Canonical load is kg (`loadKg`); the UI converts for display.
+ * These rows may link to an imported workout but never mutate it and never add volume/kcal:
+ * imported workout rows remain the only source of session totals.
+ */
+export const strengthSets = sqliteTable(
+  "strength_sets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    day: text("day").notNull(), // local day
+    exercise: text("exercise").notNull(),
+    setNo: integer("set_no").notNull().default(1),
+    reps: real("reps"),
+    loadKg: real("load_kg"),
+    note: text("note"),
+    workoutId: integer("workout_id").references(() => workouts.id),
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (t) => [
+    index("idx_strength_sets_exercise_day").on(t.exercise, t.day),
+    index("idx_strength_sets_day").on(t.day),
+  ],
 );
 
 export const activitySummaries = sqliteTable("activity_summaries", {

@@ -26,7 +26,7 @@ const SERVER_NAME = "healthvault";
 const SERVER_VERSION = "0.1.0";
 
 const INSTRUCTIONS = [
-  "Start every session with healthvault_context so answers use the user's current profile, timezone and today's local day, today's nutrition, weight trend, supplements, training and data freshness.",
+  "Start every session with healthvault_context so answers use the user's current profile, timezone and today's local day, today's nutrition, weight trend, supplements, strength detail, training (including the current-week summary), and data freshness.",
   "Confirm destructive actions with the user first: deletes (healthvault_meal_delete, healthvault_food_delete, healthvault_measurement_delete, healthvault_supplement_delete) and the target day of healthvault_copy_day. healthvault_recipe_delete archives a recipe that has logged history instead of deleting it. For past-meal corrections after a food's nutrition changed, run healthvault_food_history_preview and confirm the exact rows before healthvault_food_history_refresh.",
   "Apple Health imports stay a manual user action: tools only read imported data, and healthvault_uploads_recent shows import history.",
 ].join(" ");

@@ -30,6 +30,7 @@ import type {
   RecipeCreateInput,
   RecipeDeleteInput,
   RecipeGetInput,
+  RecipeListInput,
   RecipeLogInput,
   RecipeUpdateInput,
   RecordsRecentInput,
@@ -276,7 +277,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<Record<string, never>>({
       name: "healthvault_context",
       description:
-        "Return everything HealthVault knows before answering: the profile, timezone and today's local day, today's nutrition, weight trend, supplements, recent training, and data freshness (last upload and latest data day). No inputs.",
+        "Return everything HealthVault knows before answering: the profile (including the parsed 5K training goal and the one-tap whey link, null until configured), timezone and today's local day, today's nutrition with targets and remaining, the 7-day weight trend, the supplement checklist and the next due supplement, strength detail (sessions this week and recent exercises, manual sets with no workout or calorie credit), recent workouts with 30-day step/sleep averages plus the current-week training & recovery summary (runs, strength, steps, sleep, resting HR, weekly-average weight with sparse/stale flags; no readiness score), and data freshness (last upload, latest record day, latest workout day). No inputs.",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.healthvaultContext(signal),
@@ -285,7 +286,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<Record<string, never>>({
       name: "healthvault_profile_get",
       description:
-        "Read the user's profile together with their age and suggested nutrition targets. No inputs.",
+        "Read the user's profile together with their age, the parsed work schedule, the parsed 5K training goal, the saved one-tap whey link (null until configured) and suggested nutrition targets. No inputs.",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.profileGet(signal),
@@ -294,7 +295,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<ProfileUpdateInput>({
       name: "healthvault_profile_update",
       description:
-        "Update only the profile fields supplied; null or an empty string clears a field. This changes stored profile data. Inputs: name, birthDate (YYYY-MM-DD), sex (male|female|other), heightCm, timezone (IANA, e.g. Asia/Shanghai), units (metric|imperial), workSchedule ({ days: [{ weekday: 0-6, start: HH:MM, end: HH:MM }], note }), goalWeightKg, goalsNote, dietNote, activityNote.",
+        "Update only the profile fields supplied; null or an empty string clears a field. This changes stored profile data. Inputs: name, birthDate (YYYY-MM-DD), sex (male|female|other), heightCm, timezone (IANA, e.g. Asia/Shanghai), units (metric|imperial), workSchedule ({ days: [{ weekday: 0-6, start: HH:MM, end: HH:MM }], note }), goalWeightKg, goalsNote, dietNote, activityNote, goal ({ type: \"run5k\", targetSeconds } — 1200–3599, default 1800 = sub-30:00), wheyLink ({ foodId, supplementId?, grams, meal }).",
       input: {
         type: "object",
         properties: {
@@ -333,6 +334,25 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
           goalsNote: { type: ["string", "null"], maxLength: 4000 },
           dietNote: { type: ["string", "null"], maxLength: 4000 },
           activityNote: { type: ["string", "null"], maxLength: 4000 },
+          goal: {
+            type: ["object", "null"],
+            properties: {
+              type: { type: "string", enum: ["run5k"] },
+              targetSeconds: { type: "integer", minimum: 1200, maximum: 3599 },
+            },
+            additionalProperties: false,
+          },
+          wheyLink: {
+            type: ["object", "null"],
+            properties: {
+              foodId: { type: "integer", minimum: 1 },
+              supplementId: { type: ["integer", "null"], minimum: 1 },
+              grams: { type: "number", minimum: 0.1, maximum: 5000 },
+              meal: MEAL_SCHEMA,
+            },
+            required: ["foodId"],
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -1005,6 +1025,23 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
         additionalProperties: false,
       },
       run: (input, signal) => client.foodHistoryRefresh(input, signal),
+    }),
+
+    defineTool<RecipeListInput>({
+      name: "healthvault_recipe_list",
+      description:
+        "List saved recipes, newest edit first, without loading their ingredients. Read-only. Inputs: query (optional name search), limit (default 20, max 100), includeArchived (default false — archived recipes are history). Returns items (id, name, servingsTotal, updatedAtMs, archived, complete, unresolvedCount) plus total, limit and offset. `complete: false` means at least one ingredient has no resolved food, so its nutrition is unknown, not zero; call recipe_get for macros.",
+      input: {
+        type: "object",
+        properties: {
+          query: { type: "string", maxLength: 120 },
+          limit: { type: "integer", minimum: 1, maximum: 100 },
+          includeArchived: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.recipeList(input, signal),
     }),
   ];
 }

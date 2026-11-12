@@ -42,6 +42,18 @@ export function duration(seconds: number | null): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/** Stopwatch-style duration for a goal or attempt: 1800 -> "30:00", 3725 -> "1:02:05".
+ *  Unlike `duration`, the seconds stay visible — a 5K target is stated as a clock. */
+export function formatSeconds(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return hours > 0 ? `${hours}:${two(minutes)}:${two(rest)}` : `${minutes}:${two(rest)}`;
+}
+
 export function typeLabel(identifier: string): string {
   return identifier
     .replace(/^HK(Quantity|Category|Correlation)TypeIdentifier/, "")

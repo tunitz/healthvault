@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { agentRequestFailure } from "@/lib/auth";
 import {
   healthvaultContext,
   metricsSeries,
@@ -34,13 +35,16 @@ import {
   createRecipe,
   deleteRecipe,
   getRecipe,
+  listRecipes,
   updateRecipe,
 } from "@/lib/services/recipes";
 import { listFoodTemplates } from "@/lib/services/food-templates";
 import {
   ageOf,
   getProfile,
+  parseWheyLink,
   suggestedTargets,
+  trainingGoal,
   updateProfile,
   workSchedule,
 } from "@/lib/services/profile";
@@ -80,6 +84,8 @@ const TOOLS = {
     return {
       profile,
       workSchedule: workSchedule(profile),
+      goal: trainingGoal(profile),
+      wheyLink: parseWheyLink(profile),
       age: ageOf(profile, currentDay()),
       suggestedTargets: suggestedTargets(profile, latestMeasurement("weight")?.value ?? 75),
     };
@@ -150,6 +156,10 @@ const TOOLS = {
   },
 
   recipe_create: (body: Record<string, unknown>) => createRecipe(body),
+  // `limit` is passed through: `listRecipes` validates and caps it at 100, so an oversized value
+  // narrows to the cap instead of failing the call.
+  recipe_list: (body: Record<string, unknown>) =>
+    listRecipes({ query: body.query, limit: body.limit, includeArchived: body.includeArchived }),
   recipe_get: (body: Record<string, unknown>) => getRecipe(body.id ?? body.recipeId),
   recipe_log: (body: Record<string, unknown>) => logRecipe(body),
   recipe_update: (body: Record<string, unknown>) => updateRecipe(body.id ?? body.recipeId, body),
@@ -167,14 +177,19 @@ const TOOLS = {
   food_history_refresh: (body: Record<string, unknown>) => applyHistoryRefresh(body),
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
-export async function GET() {
+export async function GET(req: Request) {
+  const failure = agentRequestFailure(req);
+  if (failure) return NextResponse.json({ error: failure.error }, { status: failure.status });
   return NextResponse.json({
     tools: AGENT_TOOLS,
-    posture: "single-user; local agent surface, no token required (trusted LAN only)",
+    posture: "single-user; bearer token or session required; Host/Origin checked",
   });
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ tool: string }> }) {
+  const failure = agentRequestFailure(req);
+  if (failure) return NextResponse.json({ error: failure.error }, { status: failure.status });
+
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
     return NextResponse.json({ error: "content-type must be application/json" }, { status: 415 });
   }

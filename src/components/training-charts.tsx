@@ -8,6 +8,7 @@ import { compact, num, r2 } from "@/lib/format";
 import {
   distanceUnit,
   formatDistance,
+  formatPaceClock,
   paceUnitLabel,
   toDisplayDistance,
   toDisplayPace,
@@ -195,6 +196,65 @@ export function PaceTrendChart({ data, units }: { data: { day: string; paceMinPe
             <YAxis width={44} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => r2(v)} />
             <Tooltip {...tip} formatter={(v) => [`${Number(v).toFixed(2)} ${paceUnitLabel(units)}`, "pace"]} />
             <Line dataKey="paceMinPerKm" name={paceUnitLabel(units)} type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
+          </LineChart>
+        </Chart>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * 5K attempt pace over time with the goal pace as a horizontal line. The Y domain always
+ * includes the goal even when every attempt is slower, so the target never scrolls out of view.
+ */
+export function PaceGoalChart({ attempts, goalPaceMinPerKm, units }: {
+  attempts: { day: string; km: number; paceMinPerKm: number }[];
+  goalPaceMinPerKm: number;
+  units: Units;
+}) {
+  const goal = toDisplayPace(goalPaceMinPerKm, units);
+  const points = attempts.map((attempt) => ({
+    day: attempt.day,
+    km: attempt.km,
+    pace: toDisplayPace(attempt.paceMinPerKm, units),
+  }));
+  const paces = points.map((point) => point.pace);
+  const lo = Math.min(...paces, goal);
+  const hi = Math.max(...paces, goal);
+  const pad = Math.max(0.25, (hi - lo) * 0.1);
+  const best = paces.length ? Math.min(...paces) : null;
+
+  return (
+    <Section
+      title="5K attempt pace"
+      description={`Minutes per ${units === "imperial" ? "mile" : "km"} — lower is faster; the dashed line is the goal`}
+      summary={best === null ? undefined : `Best ${num(best, 2)} ${paceUnitLabel(units)} across ${points.length} ${points.length === 1 ? "attempt" : "attempts"}.`}
+    >
+      {points.length === 0 ? <Empty>No 5 km attempts in the last year</Empty> : (
+        <Chart label={`5K attempt pace chart with a goal line at ${formatPaceClock(goalPaceMinPerKm, units)}`}>
+          <LineChart data={points} margin={{ left: 0, right: 8, top: 8 }}>
+            <CartesianGrid vertical={false} stroke={C.grid} />
+            <XAxis dataKey="day" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
+            <YAxis
+              width={44}
+              {...axis}
+              domain={[Math.max(0, lo - pad), hi + pad]}
+              tickFormatter={(v: number) => r2(v)}
+            />
+            <Tooltip
+              {...tip}
+              formatter={(v, name) => [
+                name === "pace" ? `${r2(Number(v))} ${paceUnitLabel(units)}` : formatDistance(Number(v), units, 2),
+                name === "pace" ? "pace" : "distance",
+              ]}
+            />
+            <ReferenceLine
+              y={goal}
+              stroke={C.ref}
+              strokeDasharray="4 4"
+              label={{ value: `goal ${formatPaceClock(goalPaceMinPerKm, units)}`, fill: C.ref, fontSize: 11, position: "insideTopRight" }}
+            />
+            <Line dataKey="pace" name="pace" type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
           </LineChart>
         </Chart>
       )}

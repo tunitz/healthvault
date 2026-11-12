@@ -1,12 +1,13 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { db, sqlite } from "@/db";
 import { supplementLogs, supplements } from "@/db/schema";
-import { addDays, localDay, localTimeMs, weekdayIndex } from "@/lib/day";
+import { addDays, localDay, localTimeMs, weekStart, weekdayIndex } from "@/lib/day";
 import { getTimezone } from "@/lib/services/profile";
 import { boolField, dayField, fail, idField, numField, str } from "@/lib/validate";
 
 export type Supplement = typeof supplements.$inferSelect;
 export type SupplementLog = typeof supplementLogs.$inferSelect;
+type PublicSupplementLog = Omit<SupplementLog, "wheyActionId">;
 
 export type Schedule = { time: string | null; days: number[] | null; note?: string };
 
@@ -105,7 +106,10 @@ export function deleteSupplement(id: unknown): { deleted: boolean; archived: boo
 }
 
 /** Upsert today's intake for one supplement; `taken: false` removes the log. */
-export function logSupplement(input: Record<string, unknown>): { logged: boolean; log: SupplementLog | null; supplement: Supplement } {
+export function logSupplement(
+  input: Record<string, unknown>,
+  options: { wheyActionId?: string } = {},
+): { logged: boolean; log: PublicSupplementLog | null; supplement: Supplement } {
   const supplement = getSupplement(input.supplementId);
   const tz = getTimezone();
   const day =
@@ -149,10 +153,17 @@ export function logSupplement(input: Record<string, unknown>): { logged: boolean
       unit,
       note: str(input.note, "note", { max: 1000 }),
       createdAtMs: now,
+      wheyActionId: options.wheyActionId ?? null,
     })
     .onConflictDoUpdate({
       target: [supplementLogs.supplementId, supplementLogs.day],
-      set: { takenAtMs, dose, unit, note: str(input.note, "note", { max: 1000 }) },
+      set: {
+        takenAtMs,
+        dose,
+        unit,
+        note: str(input.note, "note", { max: 1000 }),
+        wheyActionId: options.wheyActionId ?? null,
+      },
     })
     .run();
 
@@ -161,14 +172,16 @@ export function logSupplement(input: Record<string, unknown>): { logged: boolean
     .from(supplementLogs)
     .where(and(eq(supplementLogs.supplementId, supplement.id), eq(supplementLogs.day, day)))
     .get()!;
-  return { logged: true, log, supplement };
+  const { wheyActionId: _wheyActionId, ...publicLog } = log;
+  void _wheyActionId;
+  return { logged: true, log: publicLog, supplement };
 }
 
 export type ChecklistItem = {
   supplement: Supplement;
   schedule: Schedule;
   logged: boolean;
-  log: SupplementLog | null;
+  log: PublicSupplementLog | null;
 };
 
 export function todayChecklist(day: string = localDay(Date.now(), getTimezone())): {
@@ -183,26 +196,42 @@ export function todayChecklist(day: string = localDay(Date.now(), getTimezone())
   const bySupplement = new Map(logs.map((l) => [l.supplementId, l]));
   const items = active.map((supplement) => {
     const log = bySupplement.get(supplement.id) ?? null;
-    return { supplement, schedule: parseSchedule(supplement.scheduleJson), logged: Boolean(log), log };
+    if (!log) return { supplement, schedule: parseSchedule(supplement.scheduleJson), logged: false, log: null };
+    const { wheyActionId: _wheyActionId, ...publicLog } = log;
+    void _wheyActionId;
+    return { supplement, schedule: parseSchedule(supplement.scheduleJson), logged: true, log: publicLog };
   });
   // Scheduled items first, by time; unscheduled ones after.
   items.sort((a, b) => (a.schedule.time ?? "99:99").localeCompare(b.schedule.time ?? "99:99"));
   return { day: validDay, items, taken: items.filter((i) => i.logged).length, total: items.length };
 }
 
-/** The next supplement still to take today, for the dashboard. */
-export function nextSupplement(day: string = localDay(Date.now(), getTimezone())): ChecklistItem | null {
+export type NextSupplement = ChecklistItem & { due: true; dueAtMs: number };
+
+/** Active scheduled supplements due today; future, logged, and untimed items are omitted. */
+export function dueSupplements(
+  day: string = localDay(Date.now(), getTimezone()),
+  nowMs = Date.now(),
+): NextSupplement[] {
   const tz = getTimezone();
   const checklist = todayChecklist(day);
-  const nowMs = Date.now();
-  const pending = checklist.items.filter((i) => !i.logged);
-  if (!pending.length) return null;
-  const timed = pending.filter((i) => i.schedule.time);
-  if (timed.length) {
-    const due = timed.find((i) => localTimeMs(day, i.schedule.time!, tz) >= nowMs);
-    return due ?? timed[0];
-  }
-  return pending[0];
+  return checklist.items
+    .filter((item) => !item.logged && item.schedule.time !== null)
+    .map((item) => ({ item, dueAtMs: localTimeMs(day, item.schedule.time!, tz) }))
+    .filter(({ dueAtMs }) => dueAtMs <= nowMs)
+    .sort(
+      (a, b) =>
+        a.dueAtMs - b.dueAtMs || a.item.supplement.id - b.item.supplement.id,
+    )
+    .map(({ item, dueAtMs }) => ({ ...item, due: true as const, dueAtMs }));
+}
+
+/** The earliest scheduled supplement already due today; future and untimed items are omitted. */
+export function nextSupplement(
+  day: string = localDay(Date.now(), getTimezone()),
+  nowMs = Date.now(),
+): NextSupplement | null {
+  return dueSupplements(day, nowMs)[0] ?? null;
 }
 
 export function supplementHistory(days = 30): {
@@ -229,4 +258,107 @@ export function supplementHistory(days = 30): {
     byDay.set(r.day, bucket);
   }
   return [...byDay.values()].sort((a, b) => b.day.localeCompare(a.day));
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Weekly adherence
+ * ------------------------------------------------------------------------------------------- */
+
+export type AdherenceDay = {
+  day: string;
+  scheduled: boolean;
+  taken: boolean;
+  /** Still ahead of today (only possible in the current week). */
+  future: boolean;
+};
+
+export type AdherenceWeek = {
+  weekStart: string;
+  weekEnd: string;
+  days: AdherenceDay[];
+  /** Days this regimen's schedule covers in the week; a null `days` list means all seven. */
+  scheduledDays: number;
+  /** Of those, the days with an intake log (an extra unscheduled dose never exceeds 100%). */
+  takenDays: number;
+  pct: number;
+  /** Same counts restricted to days that have already happened, so the current week is honest. */
+  elapsedScheduledDays: number;
+  elapsedTakenDays: number;
+  elapsedPct: number;
+};
+
+export type SupplementAdherence = {
+  supplementId: number;
+  name: string;
+  dose: number;
+  unit: string;
+  active: boolean;
+  /** Oldest first; the last entry is the current Sunday-start week. */
+  weeks: AdherenceWeek[];
+};
+
+function percent(taken: number, scheduled: number): number {
+  return scheduled > 0 ? Math.round((taken / scheduled) * 100) : 0;
+}
+
+/**
+ * Per-supplement, per-week adherence over the last `weeks` Sunday-start weeks.
+ *
+ * Rows stay one per supplement (the two magnesium entries are never merged). `scheduledDays`
+ * comes from the stored schedule alone: an archived regimen has no activation history, so its
+ * *current* schedule is applied to past weeks rather than pretending it was never scheduled.
+ * `active` lets the caller hide archived rows behind a toggle.
+ */
+export function weeklyAdherence(weeks = 4): SupplementAdherence[] {
+  const tz = getTimezone();
+  const today = localDay(Date.now(), tz);
+  const capped = Number.isFinite(weeks) && weeks >= 1 ? Math.min(Math.trunc(weeks), 52) : 4;
+  const currentStart = weekStart(today);
+  const starts = Array.from({ length: capped }, (_, i) => addDays(currentStart, -7 * (capped - 1 - i)));
+
+  // One query for the whole window; the per-supplement/day check is then in memory.
+  const logs = db
+    .select()
+    .from(supplementLogs)
+    .where(and(gte(supplementLogs.day, starts[0]), lte(supplementLogs.day, today)))
+    .all();
+  const taken = new Set(logs.map((log) => `${log.supplementId}:${log.day}`));
+
+  return listSupplements(false).map((supplement) => {
+    const { days } = parseSchedule(supplement.scheduleJson);
+    const weeksOut = starts.map((start) => {
+      const dayRows: AdherenceDay[] = Array.from({ length: 7 }, (_, i) => {
+        const day = addDays(start, i);
+        return {
+          day,
+          scheduled: days === null || days.includes(weekdayIndex(day)),
+          taken: taken.has(`${supplement.id}:${day}`),
+          future: day > today,
+        };
+      });
+      const scheduledRows = dayRows.filter((row) => row.scheduled);
+      const elapsedRows = scheduledRows.filter((row) => !row.future);
+      const takenDays = scheduledRows.filter((row) => row.taken).length;
+      const elapsedTakenDays = elapsedRows.filter((row) => row.taken).length;
+      return {
+        weekStart: start,
+        weekEnd: addDays(start, 6),
+        days: dayRows,
+        scheduledDays: scheduledRows.length,
+        takenDays,
+        pct: percent(takenDays, scheduledRows.length),
+        elapsedScheduledDays: elapsedRows.length,
+        elapsedTakenDays,
+        elapsedPct: percent(elapsedTakenDays, elapsedRows.length),
+      };
+    });
+    return {
+      supplementId: supplement.id,
+      name: supplement.name,
+      dose: supplement.dose,
+      unit: supplement.unit,
+      active: supplement.active === 1,
+      weeks: weeksOut,
+    };
+  });
 }

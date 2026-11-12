@@ -4,10 +4,9 @@
  *   bun scripts/password.ts set    [--file <path>]
  *   bun scripts/password.ts verify [--file <path>]
  *
- * `set` prompts twice with hidden input and writes HEALTHVAULT_PASSWORD_HASH (and a session
- * secret when one is missing) to the env file. Secrets are never printed and never accepted
- * as arguments. The env file is always mode 0600. The agent API takes no token, so no token
- * file is read or written; `--token-file` is accepted only for compatibility and ignored.
+ * `set` prompts twice with hidden input and writes HEALTHVAULT_PASSWORD_HASH, a session secret,
+ * and an agent API token to private files. Secret values are never printed or accepted as
+ * arguments. The env and token files are mode 0600.
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +23,9 @@ const EXTERNAL_AUTH_ENV_FILE = "~/.config/healthvault/auth.env";
 
 const PASSWORD_HASH_KEY = "HEALTHVAULT_PASSWORD_HASH";
 const SESSION_SECRET_KEY = "HEALTHVAULT_SESSION_SECRET";
+const API_TOKEN_KEY = "HEALTHVAULT_API_TOKEN";
+const API_TOKEN_FILE_KEY = "HEALTHVAULT_API_TOKEN_FILE";
+const DEFAULT_AGENT_TOKEN_FILE = "~/.config/healthvault/agent.token";
 
 const USAGE = `Usage: bun scripts/password.ts <set|verify> [options]
 
@@ -34,14 +36,14 @@ Commands:
 Options:
   --file <path>        env file to read/write (default: ~/.config/healthvault/auth.env when it
                        exists, otherwise ${DEFAULT_ENV_FILE})
-  --token-file <path>  ignored (deprecated: the agent API takes no token)
+  --token-file <path>  write the agent token to this owner-only file (default: ${DEFAULT_AGENT_TOKEN_FILE})
   -h, --help           show this help
 `;
 
 type Options = {
   command: string;
   file: string;
-  /** Accepted for backward compatibility; never read or written. */
+  /** Optional private file for the agent API token. */
   tokenFile?: string;
   help: boolean;
 };
@@ -209,6 +211,14 @@ function upsertEnv(text: string, key: string, value: string): string {
   return `${base}${replacement}\n`;
 }
 
+function removeEnvKey(text: string, key: string): string {
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`, "i");
+  return text
+    .split("\n")
+    .filter((line) => !pattern.test(line))
+    .join("\n");
+}
+
 function ensurePrivateDir(path: string): void {
   if (existsSync(path)) return;
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -249,15 +259,47 @@ async function runSet(options: Options): Promise<void> {
   const existing = readTextIfPresent(options.file) ?? "";
   const hadPasswordHash = envValue(existing, PASSWORD_HASH_KEY) !== undefined;
   const hadSessionSecret = Boolean(envValue(existing, SESSION_SECRET_KEY));
+  const configuredTokenFile = envValue(existing, API_TOKEN_FILE_KEY);
+  const existingToken = envValue(existing, API_TOKEN_KEY);
 
   let content = upsertEnv(existing, PASSWORD_HASH_KEY, hashPassword(password));
   if (!hadSessionSecret) {
     content = upsertEnv(content, SESSION_SECRET_KEY, generateSecret());
   }
+
+  const projectEnv = options.file === resolve(DEFAULT_ENV_FILE);
+  const tokenFile = options.tokenFile
+    ? resolve(expandHomePath(options.tokenFile))
+    : configuredTokenFile
+      ? resolve(expandHomePath(configuredTokenFile))
+      : resolve(expandHomePath(DEFAULT_AGENT_TOKEN_FILE));
+  let tokenEntry: string;
+  if (options.tokenFile !== undefined || configuredTokenFile) {
+    const shouldWriteToken = options.tokenFile !== undefined || !existsSync(tokenFile);
+    if (shouldWriteToken) writePrivateFile(tokenFile, `${generateSecret()}\n`);
+    content = removeEnvKey(content, API_TOKEN_KEY);
+    content = upsertEnv(content, API_TOKEN_FILE_KEY, tokenFile);
+    tokenEntry = `${shouldWriteToken ? "created/rotated" : "kept"} ${API_TOKEN_FILE_KEY} (${tokenFile})`;
+  } else if (projectEnv) {
+    const hadAgentToken = Boolean(existingToken);
+    const token = existingToken || generateSecret();
+    content = upsertEnv(content, API_TOKEN_KEY, token);
+    writePrivateFile(tokenFile, `${token}\n`);
+    tokenEntry = `${hadAgentToken ? "kept" : "created"} ${API_TOKEN_KEY}; synchronized private token file (${tokenFile})`;
+  } else if (existingToken) {
+    writePrivateFile(tokenFile, `${existingToken}\n`);
+    tokenEntry = `kept ${API_TOKEN_KEY}; synchronized private token file (${tokenFile})`;
+  } else {
+    writePrivateFile(tokenFile, `${generateSecret()}\n`);
+    content = removeEnvKey(content, API_TOKEN_KEY);
+    content = upsertEnv(content, API_TOKEN_FILE_KEY, tokenFile);
+    tokenEntry = `created ${API_TOKEN_FILE_KEY} (${tokenFile})`;
+  }
   writePrivateFile(options.file, content);
 
   const entries = [`${hadPasswordHash ? "updated" : "created"} ${PASSWORD_HASH_KEY}`];
   if (!hadSessionSecret) entries.push(`created ${SESSION_SECRET_KEY}`);
+  entries.push(tokenEntry);
 
   console.log(`wrote ${options.file} (mode 0600)`);
   for (const entry of entries) console.log(`  ${entry}`);
@@ -301,12 +343,6 @@ const options = parseArgs(process.argv.slice(2));
 if (options.help) {
   console.log(USAGE);
   process.exit(0);
-}
-if (options.tokenFile !== undefined) {
-  console.error(
-    "warning: --token-file is deprecated and ignored; the agent API takes no token " +
-      "(no token file is read or written).",
-  );
 }
 
 if (options.command === "set") await runSet(options);

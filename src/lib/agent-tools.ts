@@ -37,6 +37,7 @@ export const AGENT_TOOLS = [
   "meal_get",
   "food_history_preview",
   "food_history_refresh",
+  "recipe_list",
 ] as const;
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];

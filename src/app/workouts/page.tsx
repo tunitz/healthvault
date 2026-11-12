@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { allWorkouts, workoutTotalsAll } from "@/db/queries";
 import { duration, hrZone, num, plural, workoutLabel } from "@/lib/format";
-import { formatDistance, formatPace, resolveUnits, toCanonicalDistance } from "@/lib/units";
+import { formatDistance, formatPace, resolveUnits } from "@/lib/units";
 import { getProfile } from "@/lib/services/profile";
 
 export const dynamic = "force-dynamic";
@@ -20,16 +20,21 @@ function Metric({ title, value }: { title: string; value: string }) {
   );
 }
 
-/** Stored distance is normally km; honour a mile-labelled row instead of converting it twice. */
-function distanceKm(value: number | null, unit: string | null): number | null {
-  if (value === null) return null;
-  return (unit ?? "km").toLowerCase() === "mi" ? toCanonicalDistance(value, "imperial") : value;
-}
+/** Stored distance is normally km; the query layer already normalises any other unit. */
+const PAGE_SIZE = 500;
 
-export default function WorkoutsPage() {
+export default async function WorkoutsPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await props.searchParams;
   const units = resolveUnits(getProfile().units);
-  const workouts = allWorkouts();
   const totals = workoutTotalsAll();
+  const totalPages = Math.max(1, Math.ceil(totals.sessions / PAGE_SIZE));
+  const requested = typeof params.page === "string" ? Number.parseInt(params.page, 10) : 1;
+  const page = Number.isFinite(requested) ? Math.min(Math.max(1, Math.trunc(requested)), totalPages) : 1;
+  const workouts = allWorkouts({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+  const firstRow = (page - 1) * PAGE_SIZE + 1;
+  const lastRow = firstRow + workouts.length - 1;
 
   const groups: { key: string; label: string; rows: typeof workouts }[] = [];
   for (const workout of workouts) {
@@ -57,8 +62,8 @@ export default function WorkoutsPage() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Workouts</h1>
         <p className="text-sm text-muted-foreground">
-          {plural(totals.sessions, "workout")} in the database
-          {workouts.length < totals.sessions ? ` · showing the newest ${workouts.length}` : ""}
+          {plural(totals.sessions, "workout")}
+          {workouts.length > 0 ? ` · showing rows ${firstRow}–${lastRow} of ${totals.sessions}` : ""}
         </p>
       </div>
 
@@ -78,7 +83,8 @@ export default function WorkoutsPage() {
             <div className="flex flex-col gap-0.5">
               <h2 className="text-sm font-medium">All workouts</h2>
               <p className="text-xs text-muted-foreground">
-                {num(workouts.length, 0)} of {plural(totals.sessions, "row")}, newest first
+                {totalPages > 1 ? `Page ${page} of ${totalPages} · ` : ""}
+                {plural(totals.sessions, "session")} total, newest first
               </p>
             </div>
             <Table containerClassName="max-h-[70vh] overflow-auto">
@@ -108,7 +114,7 @@ export default function WorkoutsPage() {
                     const source = w.sourceName ?? "—";
                     const showSource = source !== previousSource;
                     previousSource = source;
-                    const km = distanceKm(w.totalDistance, w.totalDistanceUnit);
+                    const km = w.distanceKm;
                     return (
                       <Fragment key={`${w.startDate}-${i}`}>
                       <TableRow className="align-top">
@@ -117,7 +123,7 @@ export default function WorkoutsPage() {
                           <span className="hidden md:inline">{w.day}</span>
                         </TableCell>
                         <TableCell>
-                          <span className="block max-w-[7.5rem] truncate md:max-w-none">{workoutLabel(w.type)}</span>
+                          <span className="block max-w-[5.5rem] truncate sm:max-w-[7.5rem] md:max-w-none">{workoutLabel(w.type)}</span>
                         </TableCell>
                         <TableCell className="num text-right">{duration(w.durationSeconds)}</TableCell>
                         <TableCell className="num text-right">{formatDistance(km, units, 2)}</TableCell>
@@ -179,6 +185,27 @@ export default function WorkoutsPage() {
                 ))}
               </TableBody>
             </Table>
+            {totalPages > 1 ? (
+              <nav aria-label="Workout pages" className="flex items-center justify-between gap-3 text-sm">
+                {page > 1 ? (
+                  <Link className="inline-flex min-h-11 items-center text-primary underline underline-offset-4 sm:min-h-0" href={`/workouts?page=${page - 1}`} rel="prev">
+                    Previous
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">Previous</span>
+                )}
+                <span className="num text-xs text-muted-foreground">
+                  Page {page} of {totalPages}
+                </span>
+                {page < totalPages ? (
+                  <Link className="inline-flex min-h-11 items-center text-primary underline underline-offset-4 sm:min-h-0" href={`/workouts?page=${page + 1}`} rel="next">
+                    Next
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">Next</span>
+                )}
+              </nav>
+            ) : null}
           </section>
         </>
       )}

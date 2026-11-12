@@ -27,6 +27,7 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-warning: var(--warning);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -75,6 +76,9 @@
   --border: oklch(0.915 0.004 250);
   --input: oklch(0.915 0.004 250);
   --ring: oklch(0.6 0.1 165);
+  /* Incomplete / incomplete-data callouts. A real token so both themes get a checked pair
+     instead of an ad-hoc amber literal that goes muddy on a dark card. */
+  --warning: oklch(0.62 0.14 70);
 
   --chart-1: oklch(0.55 0.11 165);
   --chart-2: oklch(0.57 0.14 250);
@@ -116,6 +120,7 @@
   --border: oklch(0.3 0.01 250);
   --input: oklch(0.33 0.01 250);
   --ring: oklch(0.76 0.13 165);
+  --warning: oklch(0.82 0.14 80);
 
   --chart-1: oklch(0.76 0.13 165);
   --chart-2: oklch(0.72 0.14 250);

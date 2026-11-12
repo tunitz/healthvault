@@ -119,7 +119,7 @@ export function ExplorerClient({
             aria-haspopup="listbox"
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
-            className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+            className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 max-sm:h-11 dark:bg-input/30"
           >
             <span className="truncate">{selectedLabel}</span>
             <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground" />

@@ -5,8 +5,10 @@ import { addDays, localDay, localDayStartMs } from "@/lib/day";
 import { counts, sleepSummary, stepsSummary, workoutHistory } from "@/db/queries";
 import { dayNutrition, type DayNutrition } from "@/lib/services/nutrition";
 import { latestMeasurement, weightTrend, type Point } from "@/lib/services/measurements";
-import { ageOf, getProfile, getTimezone, isProfileStarted, workSchedule, type Profile } from "@/lib/services/profile";
+import { ageOf, getProfile, getTimezone, isProfileStarted, parseWheyLink, trainingGoal, workSchedule, type Profile } from "@/lib/services/profile";
 import { nextSupplement, todayChecklist } from "@/lib/services/supplements";
+import { strengthContext } from "@/lib/services/strength";
+import { weeklySummary } from "@/lib/services/training";
 import { fail } from "@/lib/validate";
 
 export function currentDay(): string {
@@ -109,22 +111,42 @@ export type HealthContext = {
     age: number | null;
     started: boolean;
     workSchedule: ReturnType<typeof workSchedule>;
+    /** Parsed 5K goal with the sub-30:00 default; `configured` says whether it was saved. */
+    goal: ReturnType<typeof trainingGoal>;
+    /** Parsed one-tap whey target, null until configured. */
+    wheyLink: ReturnType<typeof parseWheyLink>;
   };
   nutrition: DayNutrition;
   weight: { latest: Point | null; goalKg: number | null; change7dKg: number | null; points: Point[] };
   supplements: ReturnType<typeof todayChecklist>;
   nextSupplement: ReturnType<typeof nextSupplement>;
+  /** Manual set detail: never a workout, distance or calorie credit. */
+  strength: ReturnType<typeof strengthContext>;
   training: {
     workouts: ReturnType<typeof workoutHistory>;
     steps: ReturnType<typeof stepsSummary>;
     sleep: ReturnType<typeof sleepSummary>;
+    /** Compact current-week summary; no readiness score and no nutrition coupling. */
+    weekly: ReturnType<typeof weeklySummary>;
   };
   data: {
     counts: ReturnType<typeof counts>;
     lastUpload: { filename: string; status: string; finishedAtMs: number | null; inserted: number } | null;
     lastRecordDay: string | null;
+    lastWorkoutDay: string | null;
   };
 };
+
+/** The newest local day present in each Apple import table, without loading the full context. */
+export function dataFreshness(): { lastRecordDay: string | null; lastWorkoutDay: string | null } {
+  const lastRecord = sqlite
+    .prepare("SELECT MAX(day) AS day FROM records")
+    .get() as { day: string | null };
+  const lastWorkout = sqlite
+    .prepare("SELECT MAX(day) AS day FROM workouts")
+    .get() as { day: string | null };
+  return { lastRecordDay: lastRecord?.day ?? null, lastWorkoutDay: lastWorkout?.day ?? null };
+}
 
 /** Everything an agent should know before answering, so it never asks for stored facts. */
 export function healthvaultContext(): HealthContext {
@@ -143,9 +165,7 @@ export function healthvaultContext(): HealthContext {
     .orderBy(desc(uploads.createdAtMs))
     .limit(1)
     .get();
-  const lastRecord = sqlite
-    .prepare("SELECT MAX(day) AS day FROM records")
-    .get() as { day: string | null };
+  const fresh = dataFreshness();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -154,6 +174,8 @@ export function healthvaultContext(): HealthContext {
     profile: {
       ...profile,
       workSchedule: workSchedule(profile),
+      goal: trainingGoal(profile),
+      wheyLink: parseWheyLink(profile),
       age: ageOf(profile, today),
       started: isProfileStarted(profile),
     },
@@ -166,15 +188,18 @@ export function healthvaultContext(): HealthContext {
     },
     supplements: todayChecklist(today),
     nextSupplement: nextSupplement(today),
+    strength: strengthContext(),
     training: {
       workouts: workoutHistory(10),
       steps: stepsSummary(30),
       sleep: sleepSummary(30),
+      weekly: weeklySummary(0),
     },
     data: {
       counts: counts(),
       lastUpload: latestUpload ?? null,
-      lastRecordDay: lastRecord?.day ?? null,
+      lastRecordDay: fresh.lastRecordDay,
+      lastWorkoutDay: fresh.lastWorkoutDay,
     },
   };
 }

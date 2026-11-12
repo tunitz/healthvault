@@ -7,9 +7,24 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { join } from "node:path";
 import { formatClock, formatClockSeconds, localDay, localTimeMs } from "@/lib/day";
 import { listFoodTemplates } from "@/lib/services/food-templates";
+import { hashPassword } from "@/lib/auth";
 
 const scratchDir = mkdtempSync(join("/tmp/opencode", "healthvault-agent-test-"));
 process.env.DATABASE_PATH = join(scratchDir, "health.db");
+const AGENT_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+process.env.HEALTHVAULT_PASSWORD_HASH = hashPassword("agent-test-password");
+process.env.HEALTHVAULT_SESSION_SECRET = "0123456789abcdef0123456789abcdef";
+process.env.HEALTHVAULT_API_TOKEN = AGENT_TOKEN;
+delete process.env.HEALTHVAULT_API_TOKEN_FILE;
+process.env.HEALTHVAULT_ALLOWED_HOSTS = "127.0.0.1";
+
+function agentHeaders(json = false): HeadersInit {
+  return {
+    host: "127.0.0.1:3040",
+    authorization: `Bearer ${AGENT_TOKEN}`,
+    ...(json ? { "content-type": "application/json" } : {}),
+  };
+}
 
 let nutrition: typeof import("@/lib/services/nutrition");
 let recipes: typeof import("@/lib/services/recipes");
@@ -45,11 +60,11 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  try {
-    sqlite?.close();
-  } finally {
-    rmSync(scratchDir, { recursive: true, force: true });
-  }
+  // Do not close the shared `@/db` handle: `bun test` loads every test file into one module
+  // registry, so closing it here would leave a sibling suite with a dead connection (the pattern
+  // profile-goal.test.ts documents). `scratchDir` is this suite's own mkdtemp directory, so it is
+  // never a sibling's database — removing it is always ours to do.
+  rmSync(scratchDir, { recursive: true, force: true });
 });
 
 function columns(table: string): string[] {
@@ -103,6 +118,9 @@ describe("migration", () => {
     expect(columns("food_log")).toContain("weight_source");
     expect(columns("food_log")).toContain("macro_source");
     expect(columns("food_log")).toContain("recipe_serving_json");
+    expect(columns("food_log")).toContain("whey_action_json");
+    expect(columns("food_log")).toContain("whey_action_day");
+    expect(columns("supplement_logs")).toContain("whey_action_id");
     expect(columns("recipes")).toEqual([
       "id",
       "name",
@@ -732,7 +750,7 @@ describe("recipe lifecycle", () => {
       toolRoute.POST(
         new Request(`http://127.0.0.1:3040/api/agent/${tool}`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: agentHeaders(true),
           body: JSON.stringify(body),
         }),
         { params: Promise.resolve({ tool }) },
@@ -2056,26 +2074,41 @@ describe("explicit past-meal history refresh", () => {
 });
 
 describe("agent auth surface", () => {
-  test("discovery needs no credential", async () => {
+  test("discovery requires a bearer token", async () => {
     const discovery = await import("@/app/api/agent/route");
-    const response = await discovery.GET();
+    const denied = await discovery.GET(
+      new Request("http://127.0.0.1:3040/api/agent", { headers: { host: "127.0.0.1:3040" } }),
+    );
+    expect(denied.status).toBe(401);
+
+    const response = await discovery.GET(
+      new Request("http://127.0.0.1:3040/api/agent", { headers: agentHeaders() }),
+    );
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       tools: string[];
       posture: string;
     };
     expect(body.tools).toEqual(agentTools.AGENT_TOOLS as never);
-    expect(body.posture).toBe(
-      "single-user; local agent surface, no token required (trusted LAN only)",
-    );
+    expect(body.posture).toBe("single-user; bearer token or session required; Host/Origin checked");
   });
 
-  test("a tool call needs no credential", async () => {
+  test("a tool route enforces auth again even when called without the proxy", async () => {
     const toolRoute = await import("@/app/api/agent/[tool]/route");
+    const denied = await toolRoute.POST(
+      new Request("http://127.0.0.1:3040/api/agent/healthvault_context", {
+        method: "POST",
+        headers: { host: "127.0.0.1:3040", "content-type": "application/json" },
+        body: "{}",
+      }),
+      { params: Promise.resolve({ tool: "healthvault_context" }) },
+    );
+    expect(denied.status).toBe(401);
+
     const response = await toolRoute.POST(
       new Request("http://127.0.0.1:3040/api/agent/healthvault_context", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: agentHeaders(true),
         body: "{}",
       }),
       { params: Promise.resolve({ tool: "healthvault_context" }) },
@@ -2092,7 +2125,7 @@ describe("agent auth surface", () => {
 });
 
 describe("agent surface", () => {
-  test("the original 27 tools keep their order and the 10 additive tools follow", () => {
+  test("the original 27 tools keep their order and the additive tools follow", () => {
     const original = [
       "healthvault_context",
       "profile_get",
@@ -2134,6 +2167,70 @@ describe("agent surface", () => {
       "meal_get",
       "food_history_preview",
       "food_history_refresh",
+      "recipe_list",
     ] as never);
+    expect(agentTools.AGENT_TOOLS.length).toBe(38);
+  });
+
+  test("recipe_list is bounded and excludes archived recipes by default", async () => {
+    const toolRoute = await import("@/app/api/agent/[tool]/route");
+    const call = (body: Record<string, unknown>) =>
+      toolRoute.POST(
+        new Request("http://127.0.0.1:3040/api/agent/recipe_list", {
+          method: "POST",
+          headers: agentHeaders(true),
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ tool: "recipe_list" }) },
+      );
+    type ListBody = {
+      ok: boolean;
+      result: {
+        items: { id: number; name: string; complete: boolean; archived: boolean }[];
+        total: number;
+        limit: number;
+        offset: number;
+      };
+    };
+
+    const listed = recipes.createRecipe({
+      name: "Route listable dish",
+      servings: 2,
+      ingredients: [{ foodId: ampalaya.id, grams: 40 }],
+    });
+    const archivedForList = recipes.createRecipe({
+      name: "Route listable archived",
+      servings: 1,
+      ingredients: [{ foodId: ampalaya.id, grams: 10 }],
+    });
+    nutrition.logRecipe({ recipeId: archivedForList.id, day: "2026-11-26", meal: "snack", servingNo: 1 });
+    recipes.deleteRecipe(archivedForList.id);
+
+    // A query narrows the page to this suite's own recipes, so the earlier suites' rows cannot
+    // push them off a 20-row page. Archived history stays out of the default list.
+    const scoped = (await (await call({ query: "Route listable" })).json()) as ListBody;
+    expect(scoped.ok).toBe(true);
+    expect(scoped.result.items.map((item) => item.id)).toEqual([listed.id]);
+    expect(scoped.result.items[0].complete).toBe(true);
+    expect(scoped.result.items[0].archived).toBe(false);
+
+    const withArchived = (await (await call({ query: "Route listable", includeArchived: true })).json()) as ListBody;
+    expect(withArchived.result.items.map((item) => item.id).sort((a, b) => a - b)).toEqual(
+      [listed.id, archivedForList.id].sort((a, b) => a - b),
+    );
+    expect(withArchived.result.items.find((item) => item.id === archivedForList.id)?.archived).toBe(true);
+
+    // No query: the service default page size, newest edit first.
+    const unfiltered = (await (await call({})).json()) as ListBody;
+    expect(unfiltered.result.limit).toBe(20);
+    expect(unfiltered.result.items.length).toBeGreaterThan(0);
+
+    // The cap is the service's, not an error: an oversized limit narrows to 100.
+    const capped = (await (await call({ limit: 5_000 })).json()) as ListBody;
+    expect(capped.result.limit).toBe(100);
+
+    const emptySearch = (await (await call({ query: "no such recipe at all" })).json()) as ListBody;
+    expect(emptySearch.result.items).toEqual([]);
+    expect(emptySearch.result.total).toBe(0);
   });
 });

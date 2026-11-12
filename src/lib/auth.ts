@@ -94,6 +94,92 @@ export function verifySession(value: string | null | undefined, nowMs = Date.now
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+function requestCookie(request: Request, name: string): string | null {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return null;
+  const prefix = `${name}=`;
+  const pair = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  return pair ? pair.slice(prefix.length) : null;
+}
+
+function hostName(authority: string): string | null {
+  try {
+    const unbracketedIpv6 = /^[0-9a-f:]+$/i.test(authority) && authority.includes(":");
+    const normalizedAuthority = unbracketedIpv6 ? `[${authority}]` : authority;
+    const parsed = new URL(`http://${normalizedAuthority}`);
+    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
+    return parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return null;
+  }
+}
+
+function trustedAgentHost(request: Request): { host: URL; hostname: string } | null {
+  const authority = request.headers.get("host");
+  if (!authority) return null;
+  try {
+    const host = new URL(`http://${authority}`);
+    if (host.username || host.password || host.pathname !== "/" || host.search || host.hash) return null;
+    const hostname = hostName(authority);
+    if (!hostname) return null;
+    const configured = process.env.HEALTHVAULT_ALLOWED_HOSTS;
+    const allowed = (configured === undefined ? "localhost,127.0.0.1,::1" : configured)
+      .split(",")
+      .map((value) => hostName(value.trim()))
+      .filter((value): value is string => value !== null);
+    return allowed.includes(hostname) ? { host, hostname } : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrigin(request: Request, host: URL): boolean {
+  const origin = request.headers.get("origin");
+  if (origin === null) return true;
+  try {
+    const parsed = new URL(origin);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return false;
+    }
+    const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+    const protocol = forwardedProto === "http" || forwardedProto === "https"
+      ? `${forwardedProto}:`
+      : new URL(request.url).protocol;
+    return parsed.origin === `${protocol}//${host.host}`;
+  } catch {
+    return false;
+  }
+}
+
+function verifyAgentBearer(request: Request): boolean {
+  const raw = request.headers.get("authorization");
+  const match = raw?.match(/^Bearer ([^\s]+)$/i);
+  if (!match) return false;
+  const expected = getAuthConfig().agentToken;
+  if (!expected) return false;
+  const actualBytes = Buffer.from(match[1]);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+/** Shared proxy and route-handler defense for the machine API. */
+export function agentRequestFailure(request: Request): { status: 401 | 403; error: string } | null {
+  const trusted = trustedAgentHost(request);
+  if (!trusted) return { status: 403, error: "untrusted host" };
+  if (!sameOrigin(request, trusted.host)) return { status: 403, error: "cross-origin request rejected" };
+
+  const session = requestCookie(request, SESSION_COOKIE);
+  if (verifySession(session) || verifyAgentBearer(request)) return null;
+  return { status: 401, error: "authentication required" };
+}
+
 export function sessionCookieOptions() {
   const { sessionDays, cookieSecure } = getAuthConfig();
   return {

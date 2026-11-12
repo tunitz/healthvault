@@ -1,4 +1,4 @@
-import { num } from "@/lib/format";
+import { formatSeconds, num } from "@/lib/format";
 
 /**
  * Units preference.
@@ -136,4 +136,12 @@ export function formatPace(
 ): string {
   if (minPerKm === null || minPerKm === undefined || Number.isNaN(minPerKm)) return "—";
   return `${num(toDisplayPace(minPerKm, units), digits)} ${paceUnitLabel(units)}`;
+}
+
+/** Pace written as a clock: 6 min/km -> "6:00 min/km". Used for the 5K goal and attempt
+ *  table, where a stated target reads more clearly than a decimal. Charts keep `formatPace`. */
+export function formatPaceClock(minPerKm: number | null | undefined, units: Units): string {
+  if (minPerKm === null || minPerKm === undefined || Number.isNaN(minPerKm)) return "—";
+  const label = units === "imperial" ? "min/mi" : "min/km";
+  return `${formatSeconds(toDisplayPace(minPerKm, units) * 60)} ${label}`;
 }

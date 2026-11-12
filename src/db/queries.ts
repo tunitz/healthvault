@@ -76,22 +76,86 @@ export function hasMoveMinutes(): boolean {
   );
 }
 
-export function allWorkouts(limit = 500) {
+/**
+ * Stored workout distance normalised to km, or NULL when the unit is not understood.
+ *
+ * `src/lib/xml.ts` converts supported units on ingest (`toKm`) and preserves unsupported units
+ * as exported. NULL and blank units are also unknown: the session is still counted, but its
+ * distance is NULL rather than being silently added as if it were kilometres.
+ */
+export const WORKOUT_DISTANCE_KM = `CASE
+  WHEN total_distance IS NULL THEN NULL
+  WHEN lower(trim(total_distance_unit)) = 'km' THEN total_distance
+  WHEN lower(trim(total_distance_unit)) = 'mi' THEN total_distance * 1.609344
+  WHEN lower(trim(total_distance_unit)) = 'm' THEN total_distance / 1000.0
+  WHEN lower(trim(total_distance_unit)) = 'yd' THEN total_distance * 0.0009144
+  WHEN lower(trim(total_distance_unit)) = 'ft' THEN total_distance * 0.0003048
+  ELSE NULL
+END`;
+
+/* ---------------------------------------------------------------------------------------------
+ * Workout reconciliation
+ *
+ * A workout can arrive once per recording device: an iPhone and an Apple Watch write the same
+ * session as two rows with the same activity type and exact start/end timestamps. Apple's
+ * per-source unique index keeps both, so every read below must reconcile them first.
+ *
+ * THE RULE: one row per `(workout_activity_type, start_date, end_date)`, choosing the most
+ * complete row — a row with a normalised distance beats one without, then a row with a duration,
+ * then the lowest id (stable across runs). This is the only reconciliation rule in the codebase;
+ * changing it changes every workout surface, so it lives here once and nothing re-implements it.
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * CTE fragment: `WITH ${WORKOUT_DEDUP} SELECT … FROM deduped`.
+ *
+ * The alias `deduped` is part of the contract, and `rn` exists only to filter the chosen row.
+ */
+export const WORKOUT_DEDUP = `
+  deduped AS (
+    SELECT * FROM (
+      SELECT w.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY w.workout_activity_type, w.start_date, w.end_date
+               ORDER BY ((${WORKOUT_DISTANCE_KM}) IS NOT NULL) DESC,
+                        (w.duration_seconds IS NOT NULL) DESC,
+                        w.id ASC
+             ) AS rn
+      FROM workouts w
+    )
+    WHERE rn = 1
+  )`;
+
+/** One page of the deduped workout list, newest first. The page size is capped at 500. */
+export function allWorkouts({ limit = 500, offset = 0 }: { limit?: number; offset?: number } = {}) {
+  const take = Number.isFinite(limit) ? Math.min(Math.max(1, Math.trunc(limit)), 500) : 500;
+  const skip = Number.isFinite(offset) && offset > 0 ? Math.trunc(offset) : 0;
   return sqlite.prepare(`
+    WITH ${WORKOUT_DEDUP}
     SELECT workout_activity_type AS type, day, start_date AS startDate, end_date AS endDate,
            duration_seconds AS durationSeconds, total_distance AS totalDistance,
-           total_distance_unit AS totalDistanceUnit, total_energy_burned AS totalEnergyBurned,
+           total_distance_unit AS totalDistanceUnit, ${WORKOUT_DISTANCE_KM} AS distanceKm,
+           total_energy_burned AS totalEnergyBurned,
            total_energy_burned_unit AS totalEnergyBurnedUnit, avg_hr AS avgHr, min_hr AS minHr,
            max_hr AS maxHr, source_name AS sourceName, metadata_json AS metadataJson,
-           CASE WHEN total_distance > 0 AND duration_seconds > 0
-                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm
-    FROM workouts ORDER BY start_ms DESC LIMIT ?`).all(limit) as {
+           CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm
+    FROM deduped ORDER BY start_ms DESC LIMIT ? OFFSET ?`).all(take, skip) as {
       type: string; day: string; startDate: string; endDate: string;
       durationSeconds: number | null; totalDistance: number | null; totalDistanceUnit: string | null;
+      distanceKm: number | null;
       totalEnergyBurned: number | null; totalEnergyBurnedUnit: string | null;
       avgHr: number | null; minHr: number | null; maxHr: number | null; paceMinPerKm: number | null;
       sourceName: string | null; metadataJson: string | null;
     }[];
+}
+
+/** Newest local day with a deduped workout session; null when the table is empty. */
+export function lastWorkoutDay(): string | null {
+  const row = sqlite
+    .prepare(`WITH ${WORKOUT_DEDUP} SELECT MAX(day) AS day FROM deduped`)
+    .get() as { day: string | null };
+  return row.day;
 }
 
 export function recordsForType(typeIdentifier: string, limit = 200) {
@@ -118,7 +182,18 @@ export function recentUploads(limit = 50) {
 export function counts() {
   const one = (t: string) =>
     (sqlite.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
-  return { records: one("records"), workouts: one("workouts"), summaries: one("activity_summaries"), uploads: one("uploads") };
+  // A "workout" here is a session, not an imported row: phone + watch duplicates must not make
+  // the dashboard disagree with /workouts and the training totals.
+  const workouts = sqlite
+    .prepare(`WITH ${WORKOUT_DEDUP} SELECT COUNT(*) AS c, MAX(day) AS lastDay FROM deduped`)
+    .get() as { c: number; lastDay: string | null };
+  return {
+    records: one("records"),
+    workouts: workouts.c,
+    summaries: one("activity_summaries"),
+    uploads: one("uploads"),
+    lastWorkoutDay: workouts.lastDay,
+  };
 }
 
 export function stepsSummary(days = 30) {
@@ -222,27 +297,30 @@ export type WorkoutRow = {
   sourceName: string | null;
 };
 
-/** Newest first, with pace derived where a distance exists. */
+/** Newest first, with pace derived where a distance exists. Reads the deduped session set. */
 export function workoutHistory(limit = 200): WorkoutRow[] {
   return sqlite.prepare(`
+    WITH ${WORKOUT_DEDUP}
     SELECT day, start_date AS startDate, workout_activity_type AS type,
-           duration_seconds / 60.0 AS minutes, total_distance AS km, total_energy_burned AS kcal,
-           CASE WHEN total_distance > 0 AND duration_seconds > 0
-                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm,
-           CASE WHEN total_distance > 0 AND duration_seconds > 0
-                THEN total_distance / (duration_seconds / 3600.0) END AS speedKmh,
+           duration_seconds / 60.0 AS minutes, ${WORKOUT_DISTANCE_KM} AS km,
+           total_energy_burned AS kcal,
+           CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm,
+           CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                THEN (${WORKOUT_DISTANCE_KM}) / (duration_seconds / 3600.0) END AS speedKmh,
            avg_hr AS avgHr, min_hr AS minHr, max_hr AS maxHr, source_name AS sourceName
-    FROM workouts ORDER BY start_ms DESC LIMIT ?`).all(limit) as WorkoutRow[];
+    FROM deduped ORDER BY start_ms DESC LIMIT ?`).all(limit) as WorkoutRow[];
 }
 
 /** Per-workout intensity over time — the "am I getting fitter" line (same pace, lower HR). */
 export function workoutTrend(days = 180) {
   return sqlite.prepare(`
-    SELECT day, total_distance AS km, duration_seconds / 60.0 AS minutes,
+    WITH ${WORKOUT_DEDUP}
+    SELECT day, ${WORKOUT_DISTANCE_KM} AS km, duration_seconds / 60.0 AS minutes,
            avg_hr AS avgHr, max_hr AS maxHr,
-           CASE WHEN total_distance > 0 AND duration_seconds > 0
-                THEN (duration_seconds / 60.0) / total_distance END AS paceMinPerKm
-    FROM workouts
+           CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm
+    FROM deduped
     WHERE day >= ? AND workout_activity_type LIKE '%Running%'
     ORDER BY start_ms`).all(windowStart(days)) as {
       day: string; km: number | null; minutes: number; avgHr: number | null;
@@ -250,16 +328,75 @@ export function workoutTrend(days = 180) {
     }[];
 }
 
+/* ---------------------------------------------------------------------------------------------
+ * 5K attempts
+ *
+ * Distances are the normalised `WORKOUT_DISTANCE_KM`, so a mile or metre row is compared in
+ * kilometres and an unknown unit is excluded (NULL never passes BETWEEN). A 5K attempt is a
+ * deduped running session between 4.9 and 5.5 km: shorter rows are time trials of another
+ * distance, longer ones are not a 5K effort.
+ * ------------------------------------------------------------------------------------------- */
+
+/** Inclusive window that counts as a 5K attempt. */
+export const FIVE_K_MIN_KM = 4.9;
+export const FIVE_K_MAX_KM = 5.5;
+/** A "best 5K" must be at least this long, so a fast 4.9 km row cannot win. */
+export const FIVE_K_BEST_MIN_KM = 4.95;
+
+export type FiveKAttempt = {
+  day: string;
+  km: number;
+  seconds: number;
+  paceMinPerKm: number;
+};
+
+/** Deduped running attempts in the last `days`, oldest first (chart order). */
+export function fiveKAttempts(days = 365): FiveKAttempt[] {
+  return sqlite.prepare(`
+    WITH ${WORKOUT_DEDUP}
+    SELECT day, ${WORKOUT_DISTANCE_KM} AS km, duration_seconds AS seconds,
+           (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) AS paceMinPerKm
+    FROM deduped
+    WHERE day >= ?
+      AND workout_activity_type LIKE '%Running%'
+      AND duration_seconds > 0
+      AND ${WORKOUT_DISTANCE_KM} BETWEEN ${FIVE_K_MIN_KM} AND ${FIVE_K_MAX_KM}
+    ORDER BY day, start_ms`).all(windowStart(days)) as FiveKAttempt[];
+}
+
+/**
+ * The best attempt, or null when none qualifies.
+ *
+ * Rule: fastest pace wins; a tie on pace goes to the shorter duration (the row that spent less
+ * time running the same pace), then the earlier day for a stable result. Attempts shorter than
+ * `FIVE_K_BEST_MIN_KM` cannot be the best 5K even if their pace is faster.
+ */
+export function fiveKBest(days = 365): FiveKAttempt | null {
+  let best: FiveKAttempt | null = null;
+  for (const attempt of fiveKAttempts(days)) {
+    if (attempt.km < FIVE_K_BEST_MIN_KM) continue;
+    if (
+      best === null ||
+      attempt.paceMinPerKm < best.paceMinPerKm - 1e-9 ||
+      (Math.abs(attempt.paceMinPerKm - best.paceMinPerKm) <= 1e-9 && attempt.seconds < best.seconds)
+    ) {
+      best = attempt;
+    }
+  }
+  return best;
+}
+
 /** Week-by-week volume: sessions, minutes, distance, average HR. */
 export function weeklyTraining(weeks = 26) {
   return sqlite.prepare(`
+    WITH ${WORKOUT_DEDUP}
     SELECT date(day, '-' || CAST(strftime('%w', day) AS INTEGER) || ' days') AS weekStart,
            date(day, '-' || CAST(strftime('%w', day) AS INTEGER) || ' days', '+6 days') AS weekEnd,
            COUNT(*) AS sessions,
            SUM(duration_seconds) / 60.0 AS minutes,
-           SUM(total_distance) AS km,
+           SUM(${WORKOUT_DISTANCE_KM}) AS km,
            AVG(avg_hr) AS avgHr
-    FROM workouts
+    FROM deduped
     WHERE day >= ?
     GROUP BY weekStart ORDER BY weekStart`).all(windowStart(weeks * 7)) as {
       weekStart: string; weekEnd: string; sessions: number; minutes: number | null;
@@ -267,31 +404,55 @@ export function weeklyTraining(weeks = 26) {
     }[];
 }
 
+export type DatedWorkout = {
+  id: number; day: string; type: string; minutes: number | null; km: number | null; paceMinPerKm: number | null;
+};
+
+/** Deduped sessions whose start day falls in `[startDay, endDay]` (inclusive). The weekly
+ * summary uses this instead of a rolling window so an arbitrary past week can be read. */
+export function workoutsBetween(startDay: string, endDay: string): DatedWorkout[] {
+  return sqlite.prepare(`
+    WITH ${WORKOUT_DEDUP}
+    SELECT id, day, workout_activity_type AS type, duration_seconds / 60.0 AS minutes,
+           ${WORKOUT_DISTANCE_KM} AS km,
+           CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm
+    FROM deduped
+    WHERE day >= ? AND day <= ?
+    ORDER BY day, start_ms`).all(startDay, endDay) as DatedWorkout[];
+}
+
 export function workoutTotals(days = 30) {
   const row = sqlite.prepare(`
-    SELECT COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes, SUM(total_distance) AS km,
+    WITH ${WORKOUT_DEDUP}
+    SELECT COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes,
+           SUM(${WORKOUT_DISTANCE_KM}) AS km,
            SUM(total_energy_burned) AS kcal, AVG(avg_hr) AS avgHr, MAX(max_hr) AS maxHr
-    FROM workouts WHERE day >= ?`).get(windowStart(days)) as {
+    FROM deduped WHERE day >= ?`).get(windowStart(days)) as {
       sessions: number; minutes: number | null; km: number | null; kcal: number | null;
       avgHr: number | null; maxHr: number | null };
   return { windowDays: days, ...row };
 }
 
 /** Honest totals for the whole table, used by /workouts (which previously summed only the
- * 500 newest rows). */
+ * 500 newest rows and counted phone/watch duplicates twice). */
 export function workoutTotalsAll() {
   const row = sqlite.prepare(`
-    SELECT COUNT(*) AS sessions, SUM(duration_seconds) AS seconds, SUM(total_distance) AS km,
+    WITH ${WORKOUT_DEDUP}
+    SELECT COUNT(*) AS sessions, SUM(duration_seconds) AS seconds,
+           SUM(${WORKOUT_DISTANCE_KM}) AS km,
            SUM(total_energy_burned) AS kcal
-    FROM workouts`).get() as { sessions: number; seconds: number | null; km: number | null; kcal: number | null };
+    FROM deduped`).get() as { sessions: number; seconds: number | null; km: number | null; kcal: number | null };
   return { sessions: row.sessions, seconds: row.seconds ?? 0, km: row.km ?? 0, kcal: row.kcal ?? 0 };
 }
 
 export function workoutTypeBreakdown(days = 180) {
   return sqlite.prepare(`
-    SELECT workout_activity_type AS type, COUNT(*) AS sessions, SUM(duration_seconds) / 60.0 AS minutes,
-           SUM(total_distance) AS km
-    FROM workouts WHERE day >= ?
+    WITH ${WORKOUT_DEDUP}
+    SELECT workout_activity_type AS type, COUNT(*) AS sessions,
+           SUM(duration_seconds) / 60.0 AS minutes,
+           SUM(${WORKOUT_DISTANCE_KM}) AS km
+    FROM deduped WHERE day >= ?
     GROUP BY type ORDER BY sessions DESC`).all(windowStart(days)) as {
       type: string; sessions: number; minutes: number | null; km: number | null }[];
 }
@@ -303,9 +464,10 @@ export function trendDelta(days = 30) {
     const stop = addDays(end, -offset);
     const start = addDays(stop, -(days - 1));
     return sqlite.prepare(`
-      SELECT COUNT(*) AS sessions, SUM(total_distance) AS km, AVG(avg_hr) AS avgHr,
+      WITH ${WORKOUT_DEDUP}
+      SELECT COUNT(*) AS sessions, SUM(${WORKOUT_DISTANCE_KM}) AS km, AVG(avg_hr) AS avgHr,
              SUM(duration_seconds) / 60.0 AS minutes
-      FROM workouts WHERE day >= ? AND day <= ?`)
+      FROM deduped WHERE day >= ? AND day <= ?`)
       .get(start, stop) as {
         sessions: number; km: number | null; avgHr: number | null; minutes: number | null };
   };

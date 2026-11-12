@@ -1,9 +1,9 @@
 # @healthvault/mcp
 
-An MCP stdio server for HealthVault. It exposes the same 37 tools the app's
+An MCP stdio server for HealthVault. It exposes the same 38 tools the app's
 `POST /api/agent/<tool>` endpoint serves — context, profile, measurements, foods,
 meals, recipes, ingredient snapshots, scoped history refresh, nutrition,
-supplements, and Apple Health reads — to any MCP harness
+supplements, training/strength context, and Apple Health reads — to any MCP harness
 (OpenCode, Claude Code, Claude Desktop, Cursor, …). It replaces the OpenCode-only
 plugin in `plugins/opencodev2`.
 
@@ -18,28 +18,24 @@ no build step is needed.
 
 ## Configuration
 
-The agent API takes no token: point the client at the app and it works. Overrides:
+The agent API requires a bearer token (or a web session). Use the same private token file created by
+`bun run password:set`, and make sure the MCP process can read it:
+
+```bash
+export HEALTHVAULT_TOKEN_FILE="$HOME/.config/healthvault/agent.token"
+```
+
+Alternatively, set `HEALTHVAULT_TOKEN` in the MCP process environment. Never put the token value in
+source control. The app also checks `HEALTHVAULT_ALLOWED_HOSTS`; configure its exact hostname/IP in
+the app credentials file (default is loopback only). Overrides:
 
 - `HEALTHVAULT_URL` — base URL of the app (default `http://127.0.0.1:3040`,
   e.g. `http://healthvault.lan:3040` for a remote instance).
 - `HEALTHVAULT_TIMEOUT_MS` — per-request timeout (default 15000).
 
-`HEALTHVAULT_TOKEN` / `HEALTHVAULT_TOKEN_FILE` are ignored if still set: no
-token is sent.
-
-The endpoint is credential-less by design, so any host that can reach the app
-can read and write the tool surface. Keep it on a trusted LAN; do not expose
-port 3040 to the internet. A trusted LAN is not a browser boundary: with no
-Host/Origin allowlist, DNS rebinding can make a malicious page same-origin with
-the LAN address and call this API. That needs a fronting proxy with an allowlist
-(not implemented here).
-
-### Upgrading from a token build
-
-Update the **server first**: rebuild/restart the app, then install and restart
-this client. The old app build still requires a bearer token and this client
-sends none, so calls return 401 until the server is the new build. Rollback is
-the mirror image — restart the old server before reverting this client.
+The bearer token is sent in an Authorization header to the configured app URL. Keep the service on
+a trusted LAN or use TLS for remote access. A supplied browser Origin must match the request origin,
+and unlisted Host values are rejected by the app, including DNS-rebinding hostnames.
 
 ## Harness setup
 
@@ -48,19 +44,26 @@ so tool calls are not routed through the code-mode sandbox):
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "healthvault": {
-      "type": "local",
-      "command": ["healthvault-mcp"],
-      "enabled": true
+    "servers": {
+      "healthvault": {
+        "type": "local",
+        "command": ["healthvault-mcp"],
+        "environment": {
+          "HEALTHVAULT_TOKEN_FILE": "~/.config/healthvault/agent.token"
+        },
+        "codemode": false
+      }
     }
   }
 }
 ```
 
-Claude Code:
+Claude Code (export the token-file setting in the environment that launches Claude Code):
 
 ```bash
+export HEALTHVAULT_TOKEN_FILE="$HOME/.config/healthvault/agent.token"
 claude mcp add healthvault --scope user -- healthvault-mcp
 ```
 
@@ -69,7 +72,10 @@ Claude Desktop (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "healthvault": { "command": "healthvault-mcp" }
+    "healthvault": {
+      "command": "healthvault-mcp",
+      "env": { "HEALTHVAULT_TOKEN_FILE": "/home/you/.config/healthvault/agent.token" }
+    }
   }
 }
 ```
@@ -79,12 +85,21 @@ Cursor (`~/.cursor/mcp.json`, same shape):
 ```json
 {
   "mcpServers": {
-    "healthvault": { "command": "healthvault-mcp" }
+    "healthvault": {
+      "command": "healthvault-mcp",
+      "env": { "HEALTHVAULT_TOKEN_FILE": "/home/you/.config/healthvault/agent.token" }
+    }
   }
 }
 ```
 
 ## Ingredient snapshots and history refresh
+
+`healthvault_recipe_list` searches the recipe library read-only (`query`, `limit` default 20 / max
+100, `includeArchived` default false). It returns each recipe's id, name, servings, `archived` and
+`complete`/`unresolvedCount`, which is enough to pick one and see whether its nutrition is known;
+call `healthvault_recipe_get` for the computed total and per-serving macros. Archived recipes stay
+out of the list unless asked for.
 
 `healthvault_meal_get` returns one logged entry with its full per-ingredient snapshot.
 `healthvault_recipe_log` accepts `ingredientOverrides` plus a required `amountBasis`

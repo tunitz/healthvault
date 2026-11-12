@@ -53,6 +53,37 @@ export interface WorkSchedule {
   note?: string;
 }
 
+/** Parsed 5K goal. `targetPaceMinPerKm` is derived (targetSeconds / 5 km), never stored. */
+export interface TrainingGoal {
+  type: "run5k";
+  targetSeconds: number;
+  targetPaceMinPerKm: number;
+  /** False when no goal was saved, so the sub-30:00 value is the default rather than a choice. */
+  configured: boolean;
+}
+
+/** The saved one-tap whey target; null in the context until configured. */
+export interface WheyLink {
+  foodId: number;
+  supplementId: number | null;
+  grams: number;
+  meal: Meal;
+}
+
+/** One Sunday-start week of training and recovery, as returned by the context. */
+export interface WeeklySummary {
+  weekStart: Day;
+  weekEnd: Day;
+  runs: { count: number; km: number; minutes: number; bestPaceMinPerKm: number | null };
+  strength: { appleSessions: number; loggedSets: number; exercises: number };
+  steps: { avgPerDay: number; daysWithData: number };
+  sleep: { avgPerNight: number; nights: number };
+  restingHr: { avg: number | null; latest: number | null; latestDay: Day | null };
+  weight: { avgKg: number | null; readings: number; changeKg: number | null; sparse: boolean };
+  freshness: { lastRecordDay: Day | null; lastWorkoutDay: Day | null; stale: boolean };
+  timezone: string;
+}
+
 export interface Profile {
   id: number;
   name: string | null;
@@ -66,6 +97,10 @@ export interface Profile {
   goalsNote: string | null;
   dietNote: string | null;
   activityNote: string | null;
+  /** Raw stored 5K goal JSON; read the parsed `goal` in profile/context instead. */
+  goalJson: string | null;
+  /** Raw stored whey link JSON; read the parsed `wheyLink` instead. */
+  wheyLinkJson: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -77,6 +112,10 @@ export interface ProfileResult {
   workSchedule: WorkSchedule;
   age: number | null;
   suggestedTargets: SuggestedTargets;
+  /** Parsed 5K goal (`configured: false` = the default, not a saved choice). */
+  goal: TrainingGoal;
+  /** Saved one-tap whey target, null until configured. */
+  wheyLink: WheyLink | null;
 }
 
 export interface MeasurementRow {
@@ -241,6 +280,10 @@ export interface ProfileUpdateInput {
   goalsNote?: string | null;
   dietNote?: string | null;
   activityNote?: string | null;
+  /** 5K goal; `targetSeconds` must be 1200–3599 (default 1800 = sub-30:00). */
+  goal?: { type?: "run5k"; targetSeconds?: number } | null;
+  /** One-tap whey target; `foodId` is required, `grams` defaults to 32.4, `meal` to snack. */
+  wheyLink?: { foodId: number; supplementId?: number | null; grams?: number; meal?: Meal } | null;
 }
 
 export interface MeasurementAddInput {
@@ -459,6 +502,33 @@ export interface RecipeDeleteInput {
   id: number;
 }
 
+export interface RecipeListInput {
+  query?: string;
+  limit?: number;
+  includeArchived?: boolean;
+}
+
+/**
+ * One row of the bounded recipe list. It deliberately carries no macros: totals are computed by
+ * `recipe_get`, and `complete: false` means at least one ingredient has no resolved food.
+ */
+export interface RecipeListItem {
+  id: number;
+  name: string;
+  servingsTotal: number;
+  updatedAtMs: number;
+  archived: boolean;
+  complete: boolean;
+  unresolvedCount: number;
+}
+
+export interface RecipeListResult {
+  items: RecipeListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 /** A recipe with logged history is archived (`archived: true`), never destroyed. */
 export interface RecipeDeleteResult {
   deleted: boolean;
@@ -623,6 +693,11 @@ export interface ChecklistItem {
   schedule: Schedule;
   logged: boolean;
   log: SupplementLog | null;
+}
+
+export interface NextSupplement extends ChecklistItem {
+  due: true;
+  dueAtMs: number;
 }
 
 export interface Checklist {
@@ -790,7 +865,15 @@ export interface HealthContext {
   generatedAt: string;
   today: Day;
   timezone: string;
-  profile: Profile & { age: number | null; started: boolean; workSchedule: WorkSchedule };
+  profile: Profile & {
+    age: number | null;
+    started: boolean;
+    workSchedule: WorkSchedule;
+    /** Parsed 5K goal; `configured: false` means the sub-30:00 default, not a saved choice. */
+    goal: TrainingGoal;
+    /** Parsed one-tap whey target, null until the user configures it. */
+    wheyLink: WheyLink | null;
+  };
   nutrition: DayNutrition;
   weight: {
     latest: MeasurementPoint | null;
@@ -799,11 +882,15 @@ export interface HealthContext {
     points: MeasurementPoint[];
   };
   supplements: Checklist;
-  nextSupplement: ChecklistItem | null;
+  nextSupplement: NextSupplement | null;
+  /** Manual set detail only: never a workout, distance or calorie credit. */
+  strength: { sessionsThisWeek: number; recentExercises: string[] };
   training: {
     workouts: Workout[];
     steps: unknown;
     sleep: unknown;
+    /** Current Sunday-start week; no readiness score and no nutrition coupling. */
+    weekly: WeeklySummary;
   };
   data: {
     counts: unknown;
@@ -814,6 +901,7 @@ export interface HealthContext {
       inserted: number;
     } | null;
     lastRecordDay: Day | null;
+    lastWorkoutDay: Day | null;
   };
 }
 
@@ -867,6 +955,8 @@ export function createClient(options: ServerOptions = {}) {
 
     recipeCreate: (input: RecipeCreateInput, signal?: AbortSignal) =>
       server.request<RecipeDetail>("recipe_create", input, signal),
+    recipeList: (input: RecipeListInput = {}, signal?: AbortSignal) =>
+      server.request<RecipeListResult>("recipe_list", input, signal),
     recipeGet: (input: RecipeGetInput, signal?: AbortSignal) =>
       server.request<RecipeDetail>("recipe_get", input, signal),
     recipeLog: (input: RecipeLogInput, signal?: AbortSignal) =>

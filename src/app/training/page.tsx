@@ -1,17 +1,25 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   FitnessTrendChart, HeartRateDailyChart, PaceTrendChart, StepsChart, WeeklyVolumeChart, WorkoutHrChart,
 } from "@/components/training-charts";
+import { FiveKGoalSection, TrainingBlockSection, type WorkoutOption } from "@/components/training/plan-sections";
+import { StrengthLogSection, type StrengthWorkoutOption } from "@/components/training/strength-log";
 import {
-  heartRateDaily, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta, vo2MaxDaily,
-  weeklyTraining, workoutHistory, workoutTotals, workoutTrend,
+  fiveKAttempts, fiveKBest, heartRateDaily, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta,
+  vo2MaxDaily, weeklyTraining, workoutHistory, workoutTotals, workoutTrend, workoutsBetween,
 } from "@/db/queries";
 import { compact, duration, hrZone, num, plural, workoutLabel } from "@/lib/format";
-import { formatDistance, formatPace, resolveUnits } from "@/lib/units";
-import { getProfile } from "@/lib/services/profile";
+import { formatDistance, formatPace, formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
+import { addDays, dayLabel } from "@/lib/day";
+import { getProfile, trainingGoal } from "@/lib/services/profile";
+import { currentDay, dataFreshness } from "@/lib/services/context";
+import { exerciseProgression, listStrengthSessions, recentExercises, strengthContext } from "@/lib/services/strength";
+import { MAX_WEEK_OFFSET, weeklySummary } from "@/lib/services/training";
+import { currentBlock, nextMonday } from "@/lib/services/training-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -32,31 +40,170 @@ function Metric({ title, value, hint, delta }: {
 
 const pct = (v: number | null, unit = "%") => (v === null ? "no comparison" : `${v >= 0 ? "+" : ""}${num(v, 0)}${unit} vs previous 30 days`);
 
-export default function TrainingPage() {
-  const units = resolveUnits(getProfile().units);
+function WeekStepper({ offset }: { offset: number }) {
+  const arrow = "inline-flex size-11 items-center justify-center rounded-md border border-border text-lg leading-none hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
+  const disabled = "inline-flex size-11 items-center justify-center text-lg leading-none text-muted-foreground/40";
+  return (
+    <nav aria-label="Week" className="flex items-center gap-1">
+      {offset < MAX_WEEK_OFFSET ? (
+        <Link className={arrow} href={`/training?week=${offset + 1}`} rel="prev" aria-label="Previous week">
+          ‹
+        </Link>
+      ) : (
+        <span className={disabled} aria-hidden>‹</span>
+      )}
+      {offset === 0 ? (
+        <span className="px-2 text-xs font-medium">This week</span>
+      ) : (
+        <Link className="px-2 text-xs font-medium text-primary underline underline-offset-4" href="/training">
+          This week
+        </Link>
+      )}
+      {offset > 0 ? (
+        <Link className={arrow} href={`/training?week=${offset - 1}`} rel="next" aria-label="Next week">
+          ›
+        </Link>
+      ) : (
+        <span className={disabled} aria-hidden>›</span>
+      )}
+    </nav>
+  );
+}
+
+function WeeklyCard({ title, href, value, hint, badge }: {
+  title: string; href: string; value: string; hint?: string; badge?: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex min-w-0 flex-col gap-1 rounded-xl border border-border p-3 transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      <span className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate">{title}</span>
+        {badge}
+      </span>
+      <span className="num text-lg font-semibold tracking-tight">{value}</span>
+      {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
+    </Link>
+  );
+}
+
+export default async function TrainingPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await props.searchParams;
+  const requested = typeof params.week === "string" ? Number.parseInt(params.week, 10) : 0;
+  const weekOffset = Number.isFinite(requested) ? Math.min(Math.max(0, Math.trunc(requested)), MAX_WEEK_OFFSET) : 0;
+  const profile = getProfile();
+  const units = resolveUnits(profile.units);
+  const goal = trainingGoal(profile);
+  const fresh = dataFreshness();
   const steps = stepsDaily(90);
   const last30 = workoutTotals(30);
   const delta = trendDelta(30);
-  const weekly = weeklyTraining(26);
+  const weeklyVolume = weeklyTraining(26);
   const runs = workoutTrend(180);
   const hr = heartRateDaily(90);
   const resting = restingHeartRateDaily(180);
   const vo2 = vo2MaxDaily(365);
   const recent = workoutHistory(25);
 
-  if (recent.length === 0 && steps.length === 0) {
+  const today = currentDay();
+  const attempts = fiveKAttempts(365);
+  const bestAttempt = fiveKBest(365);
+
+  // Strength detail: manual sets, grouped by day, never added to the imported workout totals.
+  const strengthSessions = listStrengthSessions(14);
+  const strengthExercises = recentExercises(20);
+  const requestedExercise = typeof params.exercise === "string" ? params.exercise.trim() : "";
+  const selectedExercise =
+    requestedExercise !== "" && requestedExercise.length <= 120
+      ? requestedExercise
+      : (strengthExercises[0] ?? null);
+  const exerciseOptions =
+    selectedExercise !== null && !strengthExercises.includes(selectedExercise)
+      ? [selectedExercise, ...strengthExercises]
+      : strengthExercises;
+  const progression = selectedExercise === null ? [] : exerciseProgression(selectedExercise, 8);
+  const strengthWeek = strengthContext();
+  const strengthWorkouts: StrengthWorkoutOption[] = workoutsBetween(addDays(today, -13), today).map((workout) => ({
+    id: workout.id,
+    day: workout.day,
+    type: workout.type,
+    minutes: workout.minutes,
+    km: workout.km,
+  }));
+
+  const block = currentBlock();
+  const blockWorkouts = block === null ? [] : workoutsBetween(block.weekStart, block.weekEnd);
+  const workoutOptions: Record<string, WorkoutOption[]> = {};
+  for (const workout of blockWorkouts) {
+    (workoutOptions[workout.day] ??= []).push({
+      id: workout.id,
+      type: workout.type,
+      minutes: workout.minutes,
+      km: workout.km,
+    });
+  }
+
+  const header = (
+    <div className="flex flex-col gap-1">
+      <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
+      <p className="text-sm text-muted-foreground">
+        Steps, heart rate, pace and volume. One device per day — phone and watch are never added together.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Apple data through {fresh.lastRecordDay ?? "—"} · workouts through {fresh.lastWorkoutDay ?? "—"}
+      </p>
+    </div>
+  );
+
+  const goalSection = (
+    <FiveKGoalSection goal={goal} attempts={attempts} best={bestAttempt} units={units} />
+  );
+
+  const blockSection = (
+    <TrainingBlockSection
+      block={block}
+      defaultStart={nextMonday(today)}
+      workoutOptions={workoutOptions}
+      units={units}
+    />
+  );
+
+  const strengthSection = (
+    <StrengthLogSection
+      today={today}
+      units={units}
+      sessions={strengthSessions}
+      exercises={exerciseOptions}
+      selectedExercise={selectedExercise}
+      progression={progression}
+      workoutOptions={strengthWorkouts}
+      sessionsThisWeek={strengthWeek.sessionsThisWeek}
+      weekOffset={weekOffset}
+    />
+  );
+
+  if (recent.length === 0 && steps.length === 0 && strengthSessions.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          No training data yet. Upload your Apple Health <code>Export.zip</code> and this page fills in with
-          steps, heart rate, pace and weekly volume.
-        </p>
-        <Link className="text-sm text-primary underline underline-offset-4" href="/uploads">Go to Import</Link>
+      <div className="flex flex-col gap-10">
+        {header}
+        {goalSection}
+        {blockSection}
+        {strengthSection}
+        <section className="flex flex-col items-start gap-3">
+          <p className="max-w-prose text-sm text-muted-foreground">
+            No Apple training data yet. Upload your <code>Export.zip</code> and this page fills in with steps,
+            heart rate, pace and weekly volume.
+          </p>
+          <Link className="text-sm text-primary underline underline-offset-4" href="/uploads">Go to Import</Link>
+        </section>
       </div>
     );
   }
 
+  const weekly = weeklySummary(weekOffset);
   const stepAvg = steps.length ? steps.reduce((a, d) => a + d.value, 0) / steps.length : 0;
   const restingLatest = resting.at(-1)?.value;
   const restingFirst = resting[0]?.value;
@@ -79,12 +226,85 @@ export default function TrainingPage() {
 
   return (
     <div className="flex flex-col gap-10">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
-        <p className="text-sm text-muted-foreground">
-          Steps, heart rate, pace and volume. One device per day — phone and watch are never added together.
+      {header}
+
+      <section className="flex flex-col gap-3" aria-labelledby="weekly-summary-title">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div className="flex flex-col gap-0.5">
+            <h2 id="weekly-summary-title" className="text-sm font-medium">Weekly training &amp; recovery</h2>
+            <p className="text-xs text-muted-foreground">
+              {dayLabel(weekly.weekStart)} – {dayLabel(weekly.weekEnd)} · {weekly.timezone}
+            </p>
+          </div>
+          <WeekStepper offset={weekOffset} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <WeeklyCard
+            title="Runs"
+            href="#recent-workouts"
+            value={plural(weekly.runs.count, "run")}
+            hint={`${formatDistance(weekly.runs.km, units)} · ${duration(weekly.runs.minutes * 60)}${
+              weekly.runs.bestPaceMinPerKm === null ? "" : ` · best ${formatPace(weekly.runs.bestPaceMinPerKm, units)}`
+            }`}
+          />
+          <WeeklyCard
+            title="Strength"
+            href="#strength-log"
+            value={plural(weekly.strength.appleSessions, "Apple session")}
+            hint={`${plural(weekly.strength.loggedSets, "logged set")} · ${plural(weekly.strength.exercises, "exercise")}`}
+          />
+          <WeeklyCard
+            title="Steps"
+            href="#steps"
+            value={`${compact(Math.round(weekly.steps.avgPerDay))} / day`}
+            hint={`${plural(weekly.steps.daysWithData, "day")} with data`}
+          />
+          <WeeklyCard
+            title="Sleep"
+            href="/"
+            value={weekly.sleep.nights ? `${num(weekly.sleep.avgPerNight, 1)} h` : "—"}
+            hint={plural(weekly.sleep.nights, "night")}
+          />
+          <WeeklyCard
+            title="Resting HR"
+            href="#heart-rate"
+            value={weekly.restingHr.avg === null ? "—" : `${num(weekly.restingHr.avg, 0)} bpm`}
+            hint={weekly.restingHr.latest === null
+              ? "no readings"
+              : `latest ${num(weekly.restingHr.latest, 0)} bpm${weekly.restingHr.latestDay ? ` · ${weekly.restingHr.latestDay}` : ""}`}
+          />
+          <WeeklyCard
+            title="Weight"
+            href="/profile"
+            value={formatWeight(weekly.weight.avgKg, units)}
+            hint={`${plural(weekly.weight.readings, "reading")}${
+              weekly.weight.changeKg === null ? "" : ` · ${formatWeightDelta(weekly.weight.changeKg, units)}`
+            }`}
+            badge={weekly.weight.sparse ? (
+              <Badge variant="outline" className="shrink-0">sparse data</Badge>
+            ) : null}
+          />
+        </div>
+
+        <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            Apple data through {weekly.freshness.lastRecordDay ?? "—"} · workouts through{" "}
+            {weekly.freshness.lastWorkoutDay ?? "—"}
+          </span>
+          {weekly.freshness.stale ? (
+            <Badge variant="destructive" title="Apple record data ends before this week">
+              stale
+            </Badge>
+          ) : null}
         </p>
-      </div>
+      </section>
+
+      {goalSection}
+
+      {blockSection}
+
+      {strengthSection}
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
         <Metric
@@ -112,18 +332,22 @@ export default function TrainingPage() {
         />
       </div>
 
-      <StepsChart data={steps} />
+      <div id="steps" className="scroll-mt-20">
+        <StepsChart data={steps} />
+      </div>
 
       <div className="grid gap-10 lg:grid-cols-2">
-        <WeeklyVolumeChart data={weekly} units={units} />
+        <WeeklyVolumeChart data={weeklyVolume} units={units} />
         <WorkoutHrChart data={runs} />
         <PaceTrendChart data={runs} units={units} />
         <FitnessTrendChart resting={resting} vo2={vo2} />
       </div>
 
-      <HeartRateDailyChart data={hr} />
+      <div id="heart-rate" className="scroll-mt-20">
+        <HeartRateDailyChart data={hr} />
+      </div>
 
-      <section className="flex flex-col gap-3">
+      <section id="recent-workouts" className="flex scroll-mt-20 flex-col gap-3">
         <div className="flex flex-col gap-0.5">
           <h2 className="text-sm font-medium">Recent workouts</h2>
           <p className="text-xs text-muted-foreground">
@@ -149,7 +373,7 @@ export default function TrainingPage() {
               return (
                 <TableRow key={`${w.startDate}-${i}`}>
                   <TableCell className="num"><span className="md:hidden">{w.day.slice(5)}</span><span className="hidden md:inline">{w.day}</span></TableCell>
-                  <TableCell><span className="block max-w-[7.5rem] truncate md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
+                  <TableCell><span className="block max-w-[5.5rem] truncate sm:max-w-[7.5rem] md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
                   <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
                   <TableCell className="num text-right">
                     {formatDistance(w.km, units, 2)}

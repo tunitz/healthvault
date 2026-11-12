@@ -3,13 +3,15 @@
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
 import { saveProfileAction, saveWorkScheduleAction } from "@/app/actions";
+import { formatSeconds } from "@/lib/format";
 import { formatHeight, type Units } from "@/lib/units";
 import type { Profile } from "@/lib/services/profile";
 
 const SELECT =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "h-8 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+/** 16 px on phones so iOS Safari does not zoom the page when the field is focused. */
 const AREA =
-  "min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+  "min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-base outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -17,10 +19,12 @@ export function ProfileForm({
   profile,
   age,
   units,
+  goalSeconds,
 }: {
   profile: Profile;
   age: number | null;
   units: Units;
+  goalSeconds: number;
 }) {
   return (
     <ActionForm action={saveProfileAction} className="grid gap-4 sm:grid-cols-2">
@@ -67,6 +71,15 @@ export function ProfileForm({
         <Input name="goalWeightKg" type="number" inputMode="decimal" step="0.1" min="20" max="400" defaultValue={profile.goalWeightKg ?? ""} />
       </Field>
 
+      <Field label="5K goal time" hint="mm:ss — target pace is derived">
+        <Input
+          name="goalTime"
+          pattern="[0-9]{1,3}:[0-5][0-9]"
+          placeholder="30:00"
+          defaultValue={formatSeconds(goalSeconds)}
+        />
+      </Field>
+
       <div className="sm:col-span-2 grid gap-4">
         <details className="rounded-xl border border-border" open={Boolean(profile.goalsNote || profile.dietNote || profile.activityNote)}>
           <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Notes</summary>
@@ -104,7 +117,7 @@ export function WorkScheduleForm({
           const entry = byDay.get(weekday);
           return (
             <div key={weekday} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
-              <label className="flex items-center gap-2 text-sm sm:w-28">
+              <label className="flex min-h-11 items-center gap-2 text-sm sm:min-h-0 sm:w-28">
                 <input
                   type="checkbox"
                   name={`enabled-${weekday}`}

@@ -24,6 +24,7 @@ import {
   TargetsForm,
 } from "@/components/nutrition/nutrition-forms";
 import { MealList } from "@/components/nutrition/meal-list";
+import { NutritionNav } from "@/components/nutrition/nutrition-nav";
 import { NutritionTrendChart } from "@/components/nutrition/nutrition-trend-chart";
 
 export const dynamic = "force-dynamic";
@@ -156,20 +157,20 @@ export default async function NutritionPage(props: {
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline" size="icon-sm" aria-label="Previous day">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="icon-sm" className="max-sm:size-11" aria-label="Previous day">
             <Link href={`/nutrition?day=${addDays(day, -1)}&range=${range}`}>
               <ChevronLeft aria-hidden />
             </Link>
           </Button>
-          <form method="get" className="flex min-w-0 items-center gap-2">
-            <Input type="date" name="day" defaultValue={day} aria-label="Day" className="w-auto min-w-0 max-sm:h-11" />
+          <form method="get" className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none">
+            <Input type="date" name="day" defaultValue={day} aria-label="Day" className="min-w-0 flex-1 sm:w-40 sm:flex-none" />
             <input type="hidden" name="range" value={range} />
             <Button type="submit" variant="outline" size="sm">
               Go
             </Button>
           </form>
-          <Button asChild variant="outline" size="icon-sm" aria-label="Next day">
+          <Button asChild variant="outline" size="icon-sm" className="max-sm:size-11" aria-label="Next day">
             <Link href={`/nutrition?day=${addDays(day, 1)}&range=${range}`}>
               <ChevronRight aria-hidden />
             </Link>
@@ -185,6 +186,8 @@ export default async function NutritionPage(props: {
         </div>
       </div>
 
+      <NutritionNav />
+
       <MacroSummary data={data} />
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -196,7 +199,7 @@ export default async function NutritionPage(props: {
 
       <RecentFoods recent={recent} />
 
-      <MealList meals={data.meals} />
+      <MealList meals={data.meals} timezone={data.timezone} />
 
       <section className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -206,19 +209,19 @@ export default async function NutritionPage(props: {
           </div>
           <div className="flex gap-1">
             <Button asChild variant={range === 7 ? "secondary" : "ghost"} size="xs">
-              <Link href={`/nutrition?day=${day}&range=7`}>7 days</Link>
+              <Link href={`/nutrition?day=${day}&range=7`} aria-current={range === 7 ? "true" : undefined}>
+                7 days
+              </Link>
             </Button>
             <Button asChild variant={range === 30 ? "secondary" : "ghost"} size="xs">
-              <Link href={`/nutrition?day=${day}&range=30`}>30 days</Link>
+              <Link href={`/nutrition?day=${day}&range=30`} aria-current={range === 30 ? "true" : undefined}>
+                30 days
+              </Link>
             </Button>
           </div>
         </div>
         <NutritionTrendChart data={trend} />
       </section>
-
-      {data.entries.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Nothing logged for this day.</p>
-      ) : null}
     </div>
   );
 }
