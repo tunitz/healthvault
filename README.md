@@ -440,7 +440,9 @@ rebuild, restart — auth adds no migration, so the database is unaffected.
 `Export.zip` contains one `export.xml`, and a real export is huge (5 years of Apple Watch data is
 hundreds of MB of XML, millions of rows). So `src/lib/ingest.ts`:
 
-1. reads the uploaded zip into memory (the 200 MB cap in `POST /api/upload` is on the *zip*),
+1. reads the uploaded zip into memory (the 200 MB cap in `POST /api/upload` is on the *zip*; the
+   proxy body buffer that must stay above it is `experimental.proxyClientMaxBodySize` in
+   `next.config.ts` — leave it alone and the 10 MB default silently truncates every real upload),
 2. inflates `export.xml` **in 1 MiB slices** with fflate's streaming `Unzip` and yields raw chunks,
 3. feeds those chunks to an incremental sax parser (`createHealthParser()` in `src/lib/xml.ts`),
    decoding with `TextDecoder({ stream: true })` so UTF-8 sequences split across chunks survive,

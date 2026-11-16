@@ -2,6 +2,14 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3"],
+  experimental: {
+    // Proxy (src/proxy.ts) runs on every request, so Next buffers each request body to let the
+    // proxy and the route handler both read it. The default cap is 10 MB, and a body over it is
+    // silently truncated rather than rejected — a real Export.zip is ~20 MB, so `req.formData()`
+    // in POST /api/upload saw a cut-off multipart stream and answered 400. Leave headroom above
+    // the route's own 200 MB zip cap for the multipart envelope.
+    proxyClientMaxBodySize: "220mb",
+  },
   // Next 16 blocks dev resources for origins it doesn't know; the smoke tests and
   // browser checks hit 127.0.0.1 instead of localhost.
   allowedDevOrigins: ["127.0.0.1", "localhost"],
