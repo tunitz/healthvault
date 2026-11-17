@@ -1,0 +1,101 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/hv-core",
+    "crates/hv-storage",
+    "crates/hv-ingest",
+    "crates/hv-api",
+    "crates/hv-server",
+    "crates/hv-mcp",
+    "crates/hv-app-gpui",
+    "crates/hv-wasm",
+    "crates/hv-migrate",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+hv-core = { path = "crates/hv-core" }
+hv-storage = { path = "crates/hv-storage" }
+hv-ingest = { path = "crates/hv-ingest" }
+hv-api = { path = "crates/hv-api" }
+anyhow = "1"
+axum = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+hex = "0.4"
+hmac = "0.13"
+quick-xml = "0.37"
+rusqlite = { version = "0.40", features = ["bundled", "modern_sqlite"] }
+scrypt = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = "0.7"
+http-body-util = "0.1"
+time = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+await_holding_lock = "deny"
+undocumented_unsafe_blocks = "deny"
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic allows adopted for the initial parity branch. Each is a deliberate style/parity
+# tradeoff, not a suppressed correctness lint; remove individually as the code is refined.
+return_self_not_must_use = "allow"
+cast_possible_wrap = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+float_cmp = "allow"                  # exact 1.0 sentinel matches the TypeScript yield-factor rule
+match_same_arms = "allow"            # explicit state conversions must stay readable
+implicit_hasher = "allow"
+assigning_clones = "allow"
+large_stack_arrays = "allow"         # 64 KiB streaming read buffer
+while_let_loop = "allow"
+needless_range_loop = "allow"
+needless_continue = "allow"
+similar_names = "allow"
+too_many_arguments = "allow"         # SQL bind tuples mirror the column lists
+too_many_lines = "allow"
+ref_option = "allow"
+type_complexity = "allow"
+trivially_copy_pass_by_ref = "allow"
+default_trait_access = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+needless_pass_by_value = "allow"
+doc_markdown = "allow"
+result_large_err = "allow"        # axum Response is the required handler error type
+wildcard_enum_match_arm = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"

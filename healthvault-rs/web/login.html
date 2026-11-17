@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>HealthVault sign in</title>
+<style>body{font:15px system-ui,sans-serif;max-width:22rem;margin:6rem auto;padding:0 1rem}
+label{display:block;margin:.8rem 0 .3rem}input{width:100%;box-sizing:border-box;padding:.6rem}
+button{margin-top:1rem;padding:.6rem 1rem}#error{color:#b00}</style></head>
+<body><h1>HealthVault</h1><form id="f">
+<label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required>
+<button type="submit">Sign in</button><div id="error"></div></form>
+<script>
+document.getElementById("f").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const response = await fetch("/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: document.getElementById("p").value })
+  });
+  if (response.ok) location.href = "/hv-web/";
+  else document.getElementById("error").textContent = "Sign in failed.";
+});
+</script></body></html>

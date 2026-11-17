@@ -1,0 +1,121 @@
+{
+  "generatedBy": "healthvault-rs/fixtures/generate-golden.ts from the current TypeScript source",
+  "synthetic": true,
+  "day": {
+    "2026-03-08": {
+      "startMs": 1772899200000,
+      "endMs": 1772985600000,
+      "weekdayIndex": 0,
+      "weekStart": "2026-03-08",
+      "nextDay": "2026-03-09"
+    },
+    "2026-11-01": {
+      "startMs": 1793462400000,
+      "endMs": 1793548800000,
+      "weekdayIndex": 0,
+      "weekStart": "2026-11-01",
+      "nextDay": "2026-11-02"
+    },
+    "2026-11-17": {
+      "startMs": 1794844800000,
+      "endMs": 1794931200000,
+      "weekdayIndex": 2,
+      "weekStart": "2026-11-15",
+      "nextDay": "2026-11-18"
+    },
+    "2026-11-18": {
+      "startMs": 1794931200000,
+      "endMs": 1795017600000,
+      "weekdayIndex": 3,
+      "weekStart": "2026-11-15",
+      "nextDay": "2026-11-19"
+    }
+  },
+  "normalization": {
+    "kmFromMiles": 1.609344,
+    "kmFromMeters": 1,
+    "kcalFromKj": 23.90057,
+    "secondsFromMin": 2400,
+    "appleTimestampMs": 1788219000000
+  },
+  "parsed": {
+    "records": [
+      {
+        "typeIdentifier": "HKQuantityTypeIdentifierStepCount",
+        "unit": "count",
+        "value": 1200,
+        "startDate": "2026-11-17 08:00:00 +0800",
+        "startMs": 1794873600000,
+        "day": "2026-11-17",
+        "endDate": "2026-11-17 08:05:00 +0800",
+        "endMs": 1794873900000,
+        "sourceName": "Phone"
+      },
+      {
+        "typeIdentifier": "HKQuantityTypeIdentifierStepCount",
+        "unit": "count",
+        "value": 800,
+        "startDate": "2026-11-17 09:00:00 +0800",
+        "startMs": 1794877200000,
+        "day": "2026-11-17",
+        "endDate": "2026-11-17 09:05:00 +0800",
+        "endMs": 1794877500000,
+        "sourceName": "Phone"
+      },
+      {
+        "typeIdentifier": "HKQuantityTypeIdentifierStepCount",
+        "unit": "count",
+        "value": 2500,
+        "startDate": "2026-11-17 08:00:00 +0800",
+        "startMs": 1794873600000,
+        "day": "2026-11-17",
+        "endDate": "2026-11-17 08:05:00 +0800",
+        "endMs": 1794873900000,
+        "sourceName": "Watch"
+      },
+      {
+        "typeIdentifier": "HKCategoryTypeIdentifierSleepAnalysis",
+        "unit": "count",
+        "value": 4,
+        "startDate": "2026-11-18 01:00:00 +0800",
+        "startMs": 1794934800000,
+        "day": "2026-11-18",
+        "endDate": "2026-11-18 02:00:00 +0800",
+        "endMs": 1794938400000,
+        "sourceName": "Watch"
+      }
+    ],
+    "workouts": [
+      {
+        "workoutActivityType": "HKWorkoutActivityTypeRunning",
+        "startDate": "2026-11-17 06:00:00 +0800",
+        "startMs": 1794866400000,
+        "day": "2026-11-17",
+        "endDate": "2026-11-17 06:40:00 +0800",
+        "endMs": 1794868800000,
+        "durationSeconds": 2400,
+        "totalDistance": 5,
+        "totalDistanceUnit": "km",
+        "totalEnergyBurned": 420,
+        "totalEnergyBurnedUnit": "kcal",
+        "avgHr": 152,
+        "minHr": 121,
+        "maxHr": 178,
+        "sourceName": "Watch",
+        "metadataJson": "{\"weather\":\"Clear\"}"
+      }
+    ],
+    "summaries": [
+      {
+        "dateComponents": "2026-11-17",
+        "day": "2026-11-17",
+        "activeEnergyBurned": 500,
+        "appleStandHours": 12
+      }
+    ],
+    "me": {
+      "dateOfBirth": "1990-05-04",
+      "biologicalSex": "male"
+    }
+  }
+}

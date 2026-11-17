@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HealthVault — GPUI Web</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; }
+      canvas { display: block; }
+      #status { position: fixed; left: 1rem; bottom: 1rem; font: 13px system-ui, sans-serif; color: #666; }
+    </style>
+  </head>
+  <body>
+    <div id="status">Loading HealthVault web app…</div>
+    <script type="module">
+      const status = document.getElementById("status");
+      try {
+        const module = await import("./hv-app-gpui.js");
+        await module.default();
+        status.remove();
+      } catch (error) {
+        status.textContent = "Failed to start: " + error;
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>
