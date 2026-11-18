@@ -57,15 +57,48 @@ export function sleepByDayStage(nights = 90) {
     .all(capped) as { day: string; stage: number; hours: number }[]);
 }
 
-export function activitySummarySeries(limit = 180) {
-  return (sqlite.prepare(`
+export type ActivitySeriesPoint = {
+  day: string; activeEnergy: number | null; activeEnergyGoal: number | null;
+  moveMinutes: number | null; exerciseTime: number | null; standHours: number | null;
+};
+
+/**
+ * Recent Apple exports contain the rings as ordinary quantity records but no ActivitySummary
+ * elements at all. Derive the two metrics that exist in those records, using the same
+ * one-source-per-day rule as every other device-overlapping series. Move and stand hours are
+ * deliberately left null: AppleStandTime is elapsed minutes, not the distinct stand-hours count,
+ * so inventing a value there would misrepresent the data.
+ */
+function activityFromRecords(days: number): ActivitySeriesPoint[] {
+  const energy = dailySeriesSingleSource("HKQuantityTypeIdentifierActiveEnergyBurned", days, "sum");
+  const exercise = dailySeriesSingleSource("HKQuantityTypeIdentifierAppleExerciseTime", days, "sum");
+  const byDay = new Map<string, ActivitySeriesPoint>();
+  for (const point of energy) {
+    byDay.set(point.day, {
+      day: point.day, activeEnergy: point.value, activeEnergyGoal: null,
+      moveMinutes: null, exerciseTime: null, standHours: null,
+    });
+  }
+  for (const point of exercise) {
+    const row = byDay.get(point.day) ?? {
+      day: point.day, activeEnergy: null, activeEnergyGoal: null,
+      moveMinutes: null, exerciseTime: null, standHours: null,
+    };
+    row.exerciseTime = point.value;
+    byDay.set(point.day, row);
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+export function activitySummarySeries(limit = 180): ActivitySeriesPoint[] {
+  const rows = sqlite.prepare(`
     SELECT day, active_energy_burned AS activeEnergy, active_energy_burned_goal AS activeEnergyGoal,
            apple_move_minutes AS moveMinutes, apple_exercise_time AS exerciseTime,
            apple_stand_hours AS standHours
-    FROM activity_summaries ORDER BY day DESC LIMIT ?`).all(limit) as {
-      day: string; activeEnergy: number | null; activeEnergyGoal: number | null;
-      moveMinutes: number | null; exerciseTime: number | null; standHours: number | null;
-    }[]).reverse();
+    FROM activity_summaries ORDER BY day DESC LIMIT ?`).all(limit) as ActivitySeriesPoint[];
+  // Summary rows stay authoritative whenever the export supplied them.
+  if (rows.length) return rows.reverse();
+  return activityFromRecords(limit);
 }
 
 /** Any real Move-minute value at all. The metric is null in 776 of 777 real summaries, so the
@@ -236,7 +269,19 @@ export function activitySummaryTotals(days = 30) {
            SUM(apple_move_minutes) AS move, COUNT(*) AS days
     FROM activity_summaries WHERE day >= ?`).get(windowStart(days)) as {
       energy: number | null; exercise: number | null; move: number | null; days: number };
-  return { windowDays: days, energy: row.energy ?? 0, exerciseMinutes: row.exercise ?? 0, moveMinutes: row.move ?? 0, days: row.days };
+  if (row.days > 0) {
+    return { windowDays: days, energy: row.energy ?? 0, exerciseMinutes: row.exercise ?? 0, moveMinutes: row.move ?? 0, days: row.days };
+  }
+  // No ActivitySummary rows in this export: derive from the underlying quantity records so the
+  // dashboard does not report a permanent zero while the energy/exercise data is present.
+  const derived = activityFromRecords(days);
+  return {
+    windowDays: days,
+    energy: derived.reduce((sum, day) => sum + (day.activeEnergy ?? 0), 0),
+    exerciseMinutes: derived.reduce((sum, day) => sum + (day.exerciseTime ?? 0), 0),
+    moveMinutes: 0,
+    days: derived.length,
+  };
 }
 
 /* ---------------------------------------------------------------------------------------------

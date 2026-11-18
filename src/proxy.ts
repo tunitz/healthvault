@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, agentRequestFailure, verifySession } from "@/lib/auth";
+import { isUnconfigured } from "@/lib/auth-config";
+import { mcpAccessFailure } from "@/lib/services/mcp";
 
 /**
  * Pages and endpoints reachable without a session. Everything else needs a valid hv_session
@@ -8,6 +10,8 @@ import { SESSION_COOKIE, agentRequestFailure, verifySession } from "@/lib/auth";
  */
 const PUBLIC_EXACT = new Set([
   "/login",
+  "/setup",
+  "/api/auth/setup",
   "/api/auth/login",
   "/api/auth/logout",
   "/api/health",
@@ -80,10 +84,48 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") || "/" : pathname;
 
-  if (isAgentPath(path)) {
+  // Static assets, icons, the service worker and the manifest never depend on setup state — skip
+  // the credential lookup (which reads the singleton DB row) for them.
+  if (path.startsWith("/_next/") || (!path.startsWith("/api/") && STATIC_FILE.test(path))) {
+    return nextWithHeaders(request, requestHeaders, csp);
+  }
+
+  const unconfigured = isUnconfigured();
+  if (unconfigured) {
+    // Health probe, the setup page/endpoint and the login page (which renders the setup form)
+    // stay reachable. Every other API answers 503; every other page goes to setup.
+    if (path === "/api/health" || path === "/setup" || path === "/api/auth/setup" || path === "/login") {
+      return nextWithHeaders(request, requestHeaders, csp);
+    }
+    if (path.startsWith("/api/")) {
+      return withPolicy(
+        NextResponse.json(
+          { error: "setup required: create the first password at /setup", setupRequired: true },
+          { status: 503 },
+        ),
+        csp,
+      );
+    }
+    return withPolicy(NextResponse.redirect(new URL("/setup", request.url)), csp);
+  }
+
+  // Setup is permanently closed once credentials exist (env legacy or stored).
+  if (path === "/setup") {
+    return withPolicy(NextResponse.redirect(new URL("/", request.url)), csp);
+  }
+
+  // Machine access: the agent API and the direct Streamable HTTP MCP endpoint both require the
+  // session/bearer + Host/Origin gate and the real MCP enable/LAN gate. The UI-only
+  // /api/mcp/status endpoint deliberately falls through to the normal session gate below so the
+  // settings page can still report "disabled" while machine access is off.
+  if (isAgentPath(path) || path === "/api/mcp") {
     const failure = agentRequestFailure(request);
     if (failure) {
       return withPolicy(NextResponse.json({ error: failure.error }, { status: failure.status }), csp);
+    }
+    const access = mcpAccessFailure(request);
+    if (access) {
+      return withPolicy(NextResponse.json({ error: access.error }, { status: access.status }), csp);
     }
     const response = nextWithHeaders(request, requestHeaders, csp);
     response.headers.set("Cache-Control", "private, no-store");

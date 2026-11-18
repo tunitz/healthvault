@@ -79,7 +79,7 @@ export function WeightChart({
           data[0].at,
           timezone,
         )} to ${formatLocal(data[data.length - 1].at, timezone)}`}
-        className="h-[220px] w-full sm:h-[280px]"
+        className="h-[220px] w-full min-w-0 sm:h-[280px]"
       >
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ left: 0, right: 12, top: 8, bottom: 4 }}>

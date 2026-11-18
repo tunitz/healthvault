@@ -781,6 +781,18 @@ function entryMacros(entry: Record<string, unknown>): EntryComputation {
   };
 }
 
+/**
+ * Read-only nutrition preview for one logging entry.
+ *
+ * This is the exact arithmetic `logMeal` uses (`entryMacros`), exposed so the Add-food draft can
+ * show what a portion will contribute before it is saved. Nothing is written. The caller may pass
+ * a partial entry while the user is still typing; validation errors surface as normal
+ * `ValidationError`s so the action wrapper can turn them into field-level feedback.
+ */
+export function previewEntry(input: Record<string, unknown>): EntryComputation {
+  return entryMacros(input);
+}
+
 /* ---------------------------------------------------------------------------------------------
  * Food log
  * ------------------------------------------------------------------------------------------- */

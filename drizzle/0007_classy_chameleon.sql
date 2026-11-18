@@ -1,0 +1,1 @@
+CREATE INDEX `idx_records_type_start_ms` ON `records` (`type_identifier`,`start_ms`);

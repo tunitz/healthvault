@@ -137,6 +137,51 @@ export type HealthContext = {
   };
 };
 
+/** Selectable parts of the context blob. `strength` rides with `training`; `nextSupplement`
+ * rides with `supplements`; `generatedAt`/`timezone` ride with `today`. */
+export const CONTEXT_SECTIONS = [
+  "today",
+  "profile",
+  "nutrition",
+  "weight",
+  "supplements",
+  "training",
+  "data",
+] as const;
+export type ContextSection = (typeof CONTEXT_SECTIONS)[number];
+
+const SECTION_KEYS: Record<ContextSection, readonly (keyof HealthContext)[]> = {
+  today: ["generatedAt", "today", "timezone"],
+  profile: ["profile"],
+  nutrition: ["nutrition"],
+  weight: ["weight"],
+  supplements: ["supplements", "nextSupplement"],
+  training: ["training", "strength"],
+  data: ["data"],
+};
+
+/**
+ * Restrict a full context to the requested sections. Omitted/empty sections, or a list with no
+ * recognised names, return the full context unchanged. Unknown names are otherwise ignored.
+ */
+export function selectContextSections(
+  full: HealthContext,
+  sections: readonly unknown[] | undefined,
+): Partial<HealthContext> {
+  if (!sections || sections.length === 0) return full;
+  const keys = new Set<keyof HealthContext>();
+  for (const section of sections) {
+    const mapped = SECTION_KEYS[section as ContextSection];
+    if (mapped) for (const key of mapped) keys.add(key);
+  }
+  if (keys.size === 0) return full;
+  const result: Partial<HealthContext> = {};
+  for (const key of keys) {
+    (result as Record<string, unknown>)[key] = full[key];
+  }
+  return result;
+}
+
 /** The newest local day present in each Apple import table, without loading the full context. */
 export function dataFreshness(): { lastRecordDay: string | null; lastWorkoutDay: string | null } {
   const lastRecord = sqlite
@@ -148,8 +193,11 @@ export function dataFreshness(): { lastRecordDay: string | null; lastWorkoutDay:
   return { lastRecordDay: lastRecord?.day ?? null, lastWorkoutDay: lastWorkout?.day ?? null };
 }
 
-/** Everything an agent should know before answering, so it never asks for stored facts. */
-export function healthvaultContext(): HealthContext {
+/** Everything an agent should know before answering, so it never asks for stored facts.
+ * Pass `sections` to return only those parts; omitting it keeps the full contract. */
+export function healthvaultContext(): HealthContext;
+export function healthvaultContext(sections: readonly unknown[] | undefined): Partial<HealthContext>;
+export function healthvaultContext(sections?: readonly unknown[]): Partial<HealthContext> {
   const profile = getProfile();
   const tz = profile.timezone;
   const today = currentDay();
@@ -167,7 +215,7 @@ export function healthvaultContext(): HealthContext {
     .get();
   const fresh = dataFreshness();
 
-  return {
+  return selectContextSections({
     generatedAt: new Date().toISOString(),
     today,
     timezone: tz,
@@ -201,5 +249,5 @@ export function healthvaultContext(): HealthContext {
       lastRecordDay: fresh.lastRecordDay,
       lastWorkoutDay: fresh.lastWorkoutDay,
     },
-  };
+  }, sections);
 }

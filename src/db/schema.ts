@@ -26,7 +26,11 @@ export const records = sqliteTable(
     endMs: integer("end_ms").notNull(),
     sourceName: text("source_name").notNull(),
   },
-  (t) => [uniqueIndex("uq_records_key").on(t.typeIdentifier, t.startDate, t.endDate, t.sourceName, t.value)],
+  (t) => [
+    uniqueIndex("uq_records_key").on(t.typeIdentifier, t.startDate, t.endDate, t.sourceName, t.value),
+    // metrics_series filters `WHERE type_identifier = ? AND start_ms >= ?` on a 1M+ row table.
+    index("idx_records_type_start_ms").on(t.typeIdentifier, t.startMs),
+  ],
 );
 
 export const workouts = sqliteTable(
@@ -426,4 +430,32 @@ export const activitySummaries = sqliteTable("activity_summaries", {
   appleExerciseTimeGoal: real("apple_exercise_time_goal"),
   appleStandHours: real("apple_stand_hours"),
   appleStandHoursGoal: real("apple_stand_hours_goal"),
+});
+
+/* ---------------------------------------------------------------------------------------------
+ * Stage 3: versioned, cross-device preferences + UI-first single-user credentials.
+ *
+ * Both are singletons (id = 1). Settings store one validated JSON blob with a revision used for
+ * optimistic concurrency, so a stale device cannot silently overwrite another device's edits.
+ * Credentials are authoritative only once `active = 1` is written by setup or a password change;
+ * until then legacy env credentials apply. Secrets are stored as hashes / a session HMAC key only.
+ * ------------------------------------------------------------------------------------------- */
+
+/** Singleton (id = 1): the whole validated settings object plus its revision, in one JSON blob. */
+export const appSettings = sqliteTable("app_settings", {
+  id: integer("id").primaryKey(),
+  value: text("value").notNull(), // JSON: the validated AppSettings object
+  revision: integer("revision").notNull().default(0),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+});
+
+/** Singleton (id = 1): persisted UI-first credentials. Never a plaintext password. */
+export const authCredentials = sqliteTable("auth_credentials", {
+  id: integer("id").primaryKey(),
+  passwordHash: text("password_hash").notNull(), // scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>
+  sessionSecret: text("session_secret").notNull(), // HMAC key for UI session cookies
+  agentToken: text("agent_token"), // nullable: null falls back to the env/token-file agent token
+  active: integer("active").notNull().default(1), // 1 = authoritative over legacy env credentials
+  createdAtMs: integer("created_at_ms").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
 });

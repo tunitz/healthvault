@@ -86,8 +86,18 @@ function failed(error: unknown): ActionState {
   return { ok: false, error: messageOf(error) };
 }
 
+/** Revalidate a parent path and its focused subviews together, so writes made from a subview
+ *  (Targets, Plan, Strength, Regimens, History, Measurements) refresh where they were made. */
 function refresh(...paths: string[]) {
-  for (const path of paths) revalidatePath(path);
+  const all = new Set(paths);
+  const subviews: Record<string, readonly string[]> = {
+    "/nutrition": ["/nutrition/targets"],
+    "/training": ["/training/plan", "/training/strength"],
+    "/supplements": ["/supplements/regimens", "/supplements/history"],
+    "/profile": ["/measurements"],
+  };
+  for (const path of paths) for (const child of subviews[path] ?? []) all.add(child);
+  for (const path of all) revalidatePath(path);
 }
 
 /* ---------------------------------------------------------------------------------------------

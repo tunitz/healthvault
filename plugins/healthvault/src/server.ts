@@ -22,8 +22,11 @@ export interface ServerOptions {
   baseUrl?: string;
   /** Per-request timeout in milliseconds. Defaults to `HEALTHVAULT_TIMEOUT_MS` or 15000. */
   timeoutMs?: number;
-  /** Injectable fetch, mainly for tests. */
+  /** Injectable fetch, mainly for tests and the in-app transport. */
   fetchImpl?: typeof fetch;
+  /** Explicit bearer token. When omitted, resolves from env/token file. The in-app Streamable
+   * HTTP transport dispatches locally and supplies a non-secret placeholder; no file is read. */
+  token?: string;
 }
 
 function configuredToken(): string {
@@ -134,7 +137,7 @@ export function createServer(options: ServerOptions = {}): HealthVaultServer {
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
   const doFetch = options.fetchImpl ?? fetch;
-  const token = configuredToken();
+  const token = options.token ?? configuredToken();
 
   async function request<T>(tool: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
     const url = `${baseUrl}/api/agent/${encodeURIComponent(tool)}`;

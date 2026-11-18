@@ -860,6 +860,21 @@ export interface UploadRow {
   finishedAtMs: number | null;
 }
 
+/** Parts of the context blob a caller can ask for; unknown names are ignored server-side. */
+export type HealthContextSection =
+  | "today"
+  | "profile"
+  | "nutrition"
+  | "weight"
+  | "supplements"
+  | "training"
+  | "data";
+
+export interface HealthContextInput {
+  /** Omit or pass an empty array for the full context. */
+  sections?: HealthContextSection[];
+}
+
 /** Everything `ctx` returns, typed at the level the tools are expected to use. */
 export interface HealthContext {
   generatedAt: string;
@@ -914,8 +929,8 @@ export function createClient(options: ServerOptions = {}) {
     baseUrl: server.baseUrl,
     timeoutMs: server.timeoutMs,
 
-    healthvaultContext: (signal?: AbortSignal) =>
-      server.request<HealthContext>("healthvault_context", {}, signal),
+    healthvaultContext: (input?: HealthContextInput, signal?: AbortSignal) =>
+      server.request<HealthContext>("healthvault_context", input ?? {}, signal),
 
     profileGet: (signal?: AbortSignal) =>
       server.request<ProfileResult>("profile_get", {}, signal),

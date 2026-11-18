@@ -57,6 +57,9 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  /* Pixel-based spacing keeps 44px touch targets at 44px even when the user lowers the
+     font-size preference (which changes the rem basis for text but must not shrink controls). */
+  --spacing: 4px;
 
   --background: oklch(0.982 0.002 250);
   --foreground: oklch(0.22 0.012 250);
@@ -138,12 +141,76 @@
   --sidebar-ring: oklch(0.76 0.13 165);
 }
 
+/* ----------------------------------------------------------------------------------------------
+ * Appearance preferences applied by ThemeProvider as data attributes on <html>. Tokens only: the
+ * light/dark class from next-themes is untouched, so system/light/dark keep working independently.
+ * -------------------------------------------------------------------------------------------- */
+
+/* Compact density tightens every Tailwind spacing utility (v4 derives them from --spacing). */
+html[data-density="compact"] {
+  --spacing: 3.2px;
+}
+
+/* Card corner style drives the shared --radius token used by every rounded utility. */
+html[data-corners="soft"] {
+  --radius: 0.4rem;
+}
+html[data-corners="square"] {
+  --radius: 0rem;
+}
+
+/* Chart palettes, in both modes. Custom accents still win via inline --chart-1. */
+html[data-chart-palette="vibrant"] {
+  --chart-1: oklch(0.55 0.22 250);
+  --chart-2: oklch(0.6 0.22 350);
+  --chart-3: oklch(0.58 0.2 300);
+  --chart-4: oklch(0.75 0.17 70);
+  --chart-5: oklch(0.62 0.19 150);
+}
+html.dark[data-chart-palette="vibrant"] {
+  --chart-1: oklch(0.72 0.17 250);
+  --chart-2: oklch(0.72 0.19 350);
+  --chart-3: oklch(0.74 0.17 300);
+  --chart-4: oklch(0.82 0.15 80);
+  --chart-5: oklch(0.78 0.16 150);
+}
+html[data-chart-palette="pastel"] {
+  --chart-1: oklch(0.8 0.09 250);
+  --chart-2: oklch(0.83 0.09 350);
+  --chart-3: oklch(0.79 0.09 300);
+  --chart-4: oklch(0.86 0.09 80);
+  --chart-5: oklch(0.82 0.09 150);
+}
+html.dark[data-chart-palette="pastel"] {
+  --chart-1: oklch(0.8 0.08 250);
+  --chart-2: oklch(0.82 0.08 350);
+  --chart-3: oklch(0.79 0.08 300);
+  --chart-4: oklch(0.85 0.08 80);
+  --chart-5: oklch(0.81 0.08 150);
+}
+html[data-chart-palette="monochrome"] {
+  --chart-1: oklch(0.42 0.01 250);
+  --chart-2: oklch(0.55 0.01 250);
+  --chart-3: oklch(0.66 0.01 250);
+  --chart-4: oklch(0.76 0.01 250);
+  --chart-5: oklch(0.86 0.01 250);
+}
+html.dark[data-chart-palette="monochrome"] {
+  --chart-1: oklch(0.86 0.01 250);
+  --chart-2: oklch(0.76 0.01 250);
+  --chart-3: oklch(0.66 0.01 250);
+  --chart-4: oklch(0.55 0.01 250);
+  --chart-5: oklch(0.42 0.01 250);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   html {
     @apply font-sans;
+    /* Matches the default fontSize preference; ThemeProvider overrides it after load. */
+    font-size: 14px;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -158,6 +225,48 @@
   .num {
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* Font-size slider: a 44px tall hit area and an enlarged thumb for touch, with a visible ring. */
+/* iOS Safari auto-zooms when a text field is focused below 16px. The font-size preference changes
+   the rem basis, so pin text-entry controls to a 16px floor on phones regardless of that choice.
+   Pinch zoom stays enabled — only the automatic focus zoom is avoided. */
+@media (max-width: 767px) {
+  input:not([type="color"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+  select,
+  textarea,
+  [data-slot="select-trigger"] {
+    font-size: 16px;
+  }
+}
+
+.appearance-font-slider {
+  height: 44px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+.appearance-font-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.appearance-font-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: var(--primary);
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.appearance-font-slider:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 9999px;
 }
 
 @media (prefers-reduced-motion: reduce) {

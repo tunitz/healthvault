@@ -4,7 +4,7 @@ import {
   PASSWORD_HASH_KEY_BYTES,
   PASSWORD_HASH_PARAMS,
   PASSWORD_HASH_SALT_BYTES,
-  getAuthConfig,
+  getActiveAuthConfig,
   parsePasswordHash,
 } from "@/lib/auth-config";
 
@@ -35,7 +35,13 @@ function matchesPasswordHash(password: string, passwordHash: PasswordHash): bool
 }
 
 export function verifyPassword(password: string): boolean {
-  return matchesPasswordHash(password, getAuthConfig().passwordHash);
+  try {
+    return matchesPasswordHash(password, getActiveAuthConfig().passwordHash);
+  } catch {
+    // A corrupt/malformed stored hash (or a missing config) simply cannot authenticate. Never let
+    // it throw through a login or password-change handler.
+    return false;
+  }
 }
 
 /**
@@ -73,8 +79,9 @@ function sessionMac(expires: string, secret: string): string {
 
 /** Cookie value: v1.<expEpochSeconds>.<hmacSha256HexOfExp> */
 export function signSession(nowMs = Date.now()): string {
-  const expires = Math.floor(nowMs / 1000) + getAuthConfig().sessionDays * 86_400;
-  return `v1.${expires}.${sessionMac(String(expires), getAuthConfig().sessionSecret)}`;
+  const { sessionDays, sessionSecret } = getActiveAuthConfig();
+  const expires = Math.floor(nowMs / 1000) + sessionDays * 86_400;
+  return `v1.${expires}.${sessionMac(String(expires), sessionSecret)}`;
 }
 
 export function verifySession(value: string | null | undefined, nowMs = Date.now()): boolean {
@@ -89,7 +96,7 @@ export function verifySession(value: string | null | undefined, nowMs = Date.now
   const expires = Number(expiresRaw);
   if (!Number.isSafeInteger(expires) || expires <= Math.floor(nowMs / 1000)) return false;
 
-  const expected = Buffer.from(sessionMac(expiresRaw, getAuthConfig().sessionSecret), "hex");
+  const expected = Buffer.from(sessionMac(expiresRaw, getActiveAuthConfig().sessionSecret), "hex");
   const actual = Buffer.from(macHex, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
@@ -162,11 +169,36 @@ function verifyAgentBearer(request: Request): boolean {
   const raw = request.headers.get("authorization");
   const match = raw?.match(/^Bearer ([^\s]+)$/i);
   if (!match) return false;
-  const expected = getAuthConfig().agentToken;
+  const expected = getActiveAuthConfig().agentToken;
   if (!expected) return false;
   const actualBytes = Buffer.from(match[1]);
   const expectedBytes = Buffer.from(expected);
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+/**
+ * CSRF defense for cookie-authenticated UI routes (settings, setup, password change). Unlike the
+ * agent API these must work from any configured Host — including a LAN IP — so this compares the
+ * Origin header with the request's own origin instead of the agent allowlist. SameSite=Lax cookies
+ * already stop cross-site credentialed writes; rejecting a mismatched Origin makes it explicit.
+ */
+export function crossOriginFailure(request: Request): { status: 403; error: string } | null {
+  const authority = request.headers.get("host");
+  let self: URL;
+  try {
+    if (authority) {
+      // Trust the request's own Host (LAN IP included), not a static allowlist; the session cookie
+      // is host-only, so a different Host cannot carry it. Bracket a bare IPv6 literal for URL.
+      const bareIpv6 = /^[0-9a-f:]+$/i.test(authority) && authority.includes(":");
+      self = new URL(`http://${bareIpv6 ? `[${authority}]` : authority}`);
+    } else {
+      self = new URL(request.url);
+    }
+  } catch {
+    return { status: 403, error: "invalid request URL" };
+  }
+  if (!sameOrigin(request, self)) return { status: 403, error: "cross-origin request rejected" };
+  return null;
 }
 
 /** Shared proxy and route-handler defense for the machine API. */
@@ -181,7 +213,7 @@ export function agentRequestFailure(request: Request): { status: 401 | 403; erro
 }
 
 export function sessionCookieOptions() {
-  const { sessionDays, cookieSecure } = getAuthConfig();
+  const { sessionDays, cookieSecure } = getActiveAuthConfig();
   return {
     httpOnly: true,
     sameSite: "lax" as const,
@@ -192,7 +224,7 @@ export function sessionCookieOptions() {
 }
 
 export function expiredSessionCookieOptions() {
-  const { cookieSecure } = getAuthConfig();
+  const { cookieSecure } = getActiveAuthConfig();
   return {
     httpOnly: true,
     sameSite: "lax" as const,

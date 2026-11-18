@@ -14,6 +14,7 @@ import type {
   FoodHistoryRefreshInput,
   FoodSearchInput,
   FoodTemplateApplyInput,
+  HealthContextInput,
   HealthVaultClient,
   MealDeleteInput,
   MealGetInput,
@@ -44,6 +45,21 @@ import type {
 } from "./client";
 
 export const TOOL_NAMESPACE = "healthvault";
+
+/**
+ * Server identity and instructions are shared by the stdio entry (`mcp.ts`) and the in-app
+ * Streamable HTTP transport. This module stays free of the MCP SDK so both transports can import
+ * the exact same text and tool list without drifting. The instructions deliberately make the
+ * context call conditional, confirm destructive actions, and keep imports manual.
+ */
+export const SERVER_NAME = "healthvault";
+export const SERVER_VERSION = "0.1.0";
+
+export const INSTRUCTIONS = [
+  "Call healthvault_context only when the user asks a question that needs stored HealthVault data (profile, timezone, today's local day, nutrition, weight, supplements, strength, training, data freshness); do not call it for greetings or questions that need no stored data. Pass its optional `sections` array to fetch just the parts you need.",
+  "Confirm destructive actions with the user first: deletes (healthvault_meal_delete, healthvault_food_delete, healthvault_measurement_delete, healthvault_supplement_delete) and the target day of healthvault_copy_day. healthvault_recipe_delete archives a recipe that has logged history instead of deleting it. For past-meal corrections after a food's nutrition changed, run healthvault_food_history_preview and confirm the exact rows before healthvault_food_history_refresh.",
+  "Apple Health imports stay a manual user action: tools only read imported data, and healthvault_uploads_recent shows import history.",
+].join(" ");
 
 /** MCP tool annotations, kept as plain data so this file needs no SDK import. */
 export interface ToolAnnotations {
@@ -249,6 +265,15 @@ const NO_INPUT = {
   additionalProperties: false,
 };
 
+const CONTEXT_SECTIONS_SCHEMA = {
+  type: "array",
+  items: {
+    type: "string",
+    enum: ["today", "profile", "nutrition", "weight", "supplements", "training", "data"],
+  },
+  description: "Only these parts to return; unknown names are ignored, and omitted or empty returns everything.",
+};
+
 const DAY_PATTERN = DAY_SCHEMA.pattern;
 
 function defineTool<Input>(definition: {
@@ -274,19 +299,21 @@ function defineTool<Input>(definition: {
 
 export function createToolDefinitions(client: HealthVaultClient): ToolDefinition[] {
   return [
-    defineTool<Record<string, never>>({
+    defineTool<HealthContextInput>({
       name: "healthvault_context",
-      description:
-        "Return everything HealthVault knows before answering: the profile (including the parsed 5K training goal and the one-tap whey link, null until configured), timezone and today's local day, today's nutrition with targets and remaining, the 7-day weight trend, the supplement checklist and the next due supplement, strength detail (sessions this week and recent exercises, manual sets with no workout or calorie credit), recent workouts with 30-day step/sleep averages plus the current-week training & recovery summary (runs, strength, steps, sleep, resting HR, weekly-average weight with sparse/stale flags; no readiness score), and data freshness (last upload, latest record day, latest workout day). No inputs.",
-      input: NO_INPUT,
+      description: "Return stored HealthVault data; `sections` limits the response (unknown names ignored; omitted/empty = all).",
+      input: {
+        type: "object",
+        properties: { sections: CONTEXT_SECTIONS_SCHEMA },
+        additionalProperties: false,
+      },
       readOnly: true,
-      run: (_input, signal) => client.healthvaultContext(signal),
+      run: (input, signal) => client.healthvaultContext(input, signal),
     }),
 
     defineTool<Record<string, never>>({
       name: "healthvault_profile_get",
-      description:
-        "Read the user's profile together with their age, the parsed work schedule, the parsed 5K training goal, the saved one-tap whey link (null until configured) and suggested nutrition targets. No inputs.",
+      description: "Read the user's profile, parsed schedule, 5K goal, whey link and suggested nutrition targets.",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.profileGet(signal),
@@ -294,8 +321,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<ProfileUpdateInput>({
       name: "healthvault_profile_update",
-      description:
-        "Update only the profile fields supplied; null or an empty string clears a field. This changes stored profile data. Inputs: name, birthDate (YYYY-MM-DD), sex (male|female|other), heightCm, timezone (IANA, e.g. Asia/Shanghai), units (metric|imperial), workSchedule ({ days: [{ weekday: 0-6, start: HH:MM, end: HH:MM }], note }), goalWeightKg, goalsNote, dietNote, activityNote, goal ({ type: \"run5k\", targetSeconds } — 1200–3599, default 1800 = sub-30:00), wheyLink ({ foodId, supplementId?, grams, meal }).",
+      description: "Update only the supplied profile fields; null or an empty string clears a field.",
       input: {
         type: "object",
         properties: {
@@ -361,8 +387,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MeasurementAddInput>({
       name: "healthvault_measurement_add",
-      description:
-        "Record a manual body measurement (merged with Apple weight on read). Inputs: kind (weight|bodyFat|waist), value, optional unit (kg|lb for weight, cm|in for waist, % for bodyFat), optional day (YYYY-MM-DD), takenAt (ISO timestamp or epoch ms), note. day defaults to today in the profile timezone.",
+      description: "Record a manual body measurement, merged with Apple weight on read.",
       input: {
         type: "object",
         properties: {
@@ -381,8 +406,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MeasurementHistoryInput>({
       name: "healthvault_measurement_history",
-      description:
-        "Read one measurement series, merging manual entries with Apple BodyMass for weight. Inputs: kind (weight|bodyFat|waist, default weight) and days (default 365).",
+      description: "Read a measurement series, merging manual entries with Apple BodyMass for weight.",
       input: {
         type: "object",
         properties: {
@@ -397,8 +421,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodSearchInput>({
       name: "healthvault_food_search",
-      description:
-        "Find reusable foods by name or brand. Inputs: query (optional; when omitted, recently updated foods are returned) and limit (default 20).",
+      description: "Find reusable foods by name or brand.",
       input: {
         type: "object",
         properties: {
@@ -413,8 +436,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodAddInput>({
       name: "healthvault_food_add",
-      description:
-        "Create or update a reusable food with nutrition per 100 g. Never invent nutrition values; ask the user when unsure. Inputs: name, optional brand, barcode, servingGrams, state (raw|cooked|dry|rehydrated|none — the basis of the per-100 g values), yieldFactor (cooked g per raw g, or per dry g), measures (grams per household unit, e.g. {\"tbsp\":6}), source, sourceUrl, sourceDate (YYYY-MM-DD), extra, and per100g { kcal (required), proteinG, carbsG, fatG, fibreG, sodiumMg }. This is a manual entry surface: it does not fetch or infer values.",
+      description: "Create or update a reusable food with per-100 g nutrition; never invent values.",
       input: {
         type: "object",
         properties: {
@@ -442,8 +464,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealLogInput>({
       name: "healthvault_meal_log",
-      description:
-        "Log a whole meal in one call. Each entry may reference a foodId, give a name with per100g values, or give a name with absolute macros for the portion. A household measure ({ name, count }) may replace grams. Inputs: meal (breakfast|lunch|dinner|snack), entries (non-empty, at most 100), optional day (YYYY-MM-DD) and eatenAt (ISO timestamp or epoch ms; a timestamp without an offset is read in the profile timezone, and day defaults to the eatenAt day, then today). For a saved food, state must match the food's own basis — use gramsAs to say what you weighed; an inline entry may declare its state. Mark estimated: true when nutrition values are approximate; weightSource/macroSource state provenance precisely.",
+      description: "Log one or more foods or a recipe serving into a meal.",
       input: {
         type: "object",
         properties: {
@@ -465,8 +486,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealUpdateInput>({
       name: "healthvault_meal_update",
-      description:
-        "Change an already logged meal entry, so this edits logged data. Inputs: id (required), plus any of meal, name, grams, kcal, proteinG, carbsG, fatG, fibreG, sodiumMg, estimated, note, day, eatenAt (ISO timestamp or epoch ms; no offset = profile timezone), gramsAs (raw|cooked), weightSource, macroSource. Recipe-sourced entries also accept servingNo and servingFraction; a grams or servingFraction edit rescales from the recipe's stored per-serving snapshot. Changing only grams on a food entry recomputes the macros from the food rather than compounding.",
+      description: "Change an already logged meal entry.",
       input: {
         type: "object",
         properties: {
@@ -499,8 +519,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealDeleteInput>({
       name: "healthvault_meal_delete",
-      description:
-        "Permanently delete a logged meal entry, so this changes logged data; confirm the deletion with the user first. Inputs: id (required).",
+      description: "Permanently delete a logged meal entry; confirm with the user first.",
       input: {
         type: "object",
         properties: {
@@ -515,8 +534,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<NutritionDayInput>({
       name: "healthvault_nutrition_day",
-      description:
-        "Read one day's meals, totals, targets and remaining macros. Inputs: optional day (YYYY-MM-DD); day defaults to today in the profile timezone.",
+      description: "Read one day's meals, totals, targets and remaining macros.",
       input: {
         type: "object",
         properties: { day: DAY_SCHEMA },
@@ -528,8 +546,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<NutritionSummaryInput>({
       name: "healthvault_nutrition_summary",
-      description:
-        "Read per-day nutrition totals over a range. Inputs: days (default 7, max 366) and optional endDay (YYYY-MM-DD); endDay defaults to today in the profile timezone.",
+      description: "Read per-day nutrition totals over a range.",
       input: {
         type: "object",
         properties: {
@@ -544,8 +561,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<NutritionTargetSetInput>({
       name: "healthvault_nutrition_target_set",
-      description:
-        "Create or change an effective-dated nutrition target. Only the fields supplied change; omitted fields inherit the previous target and then the suggestion, so a partial update never zeroes the plan. This changes stored targets. Inputs: effectiveFrom (YYYY-MM-DD, defaults to today in the profile timezone), kcal, proteinG, carbsG, fatG, fibreG, sodiumMg.",
+      description: "Create or change an effective-dated nutrition target.",
       input: {
         type: "object",
         properties: {
@@ -564,8 +580,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<Record<string, never>>({
       name: "healthvault_supplement_list",
-      description:
-        "List supplements together with today's checklist and taken state. No inputs.",
+      description: "List supplements with today's checklist and taken state.",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.supplementList(signal),
@@ -573,8 +588,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementCreateInput>({
       name: "healthvault_supplement_create",
-      description:
-        "Create a supplement. Inputs: name, optional dose, unit, schedule ({ time: HH:MM, days: 0-6[], note }), nutrients, notes, active.",
+      description: "Create a supplement regimen.",
       input: {
         type: "object",
         properties: {
@@ -605,8 +619,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementUpdateInput>({
       name: "healthvault_supplement_update",
-      description:
-        "Change an existing supplement regimen; only the fields supplied change. This alters stored regimen data. Inputs: supplementId (required), and any of name, dose, unit, schedule ({ time: HH:MM, days: 0-6[], note } or null), nutrients, notes, active (false archives it).",
+      description: "Change an existing supplement regimen; only supplied fields change.",
       input: {
         type: "object",
         properties: {
@@ -638,8 +651,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementLogInput>({
       name: "healthvault_supplement_log",
-      description:
-        "Mark a supplement taken or untaken for a day. Inputs: supplementId (required), optional day (YYYY-MM-DD), taken (default true; false removes the log), dose, unit, takenAt (ISO timestamp or epoch ms), note. day defaults to today in the profile timezone.",
+      description: "Mark a supplement taken or untaken for a day.",
       input: {
         type: "object",
         properties: {
@@ -659,8 +671,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MetricsSeriesInput>({
       name: "healthvault_metrics_series",
-      description:
-        "Read an Apple Health time series, one source per day where sources overlap. Inputs: metric (steps|heart_rate|resting_heart_rate|vo2max|weight|sleep|active_energy) and days (default 30, max 730).",
+      description: "Read an Apple Health time series, one source per day.",
       input: {
         type: "object",
         properties: {
@@ -687,8 +698,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<WorkoutsRecentInput>({
       name: "healthvault_workouts_recent",
-      description:
-        "Read recent workouts, newest first, with duration, distance, energy, pace, speed and heart rate. Inputs: limit (default 10).",
+      description: "Read recent workouts, newest first.",
       input: {
         type: "object",
         properties: {
@@ -702,8 +712,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MeasurementDeleteInput>({
       name: "healthvault_measurement_delete",
-      description:
-        "Permanently delete a manual body measurement, so this changes stored data; confirm the deletion with the user first. Only manual entries are removed — Apple BodyMass rows stay. Inputs: id (required).",
+      description: "Permanently delete a manual body measurement; confirm with the user first.",
       input: {
         type: "object",
         properties: {
@@ -718,8 +727,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodDeleteInput>({
       name: "healthvault_food_delete",
-      description:
-        "Permanently delete a reusable food, so this changes stored data; confirm the deletion with the user first. Fails with 409 when the food is still used by a logged meal. Inputs: id (required).",
+      description: "Permanently delete a reusable food; confirm with the user first.",
       input: {
         type: "object",
         properties: {
@@ -734,8 +742,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<CopyDayInput>({
       name: "healthvault_copy_day",
-      description:
-        "Copy a day's logged meals onto another day, so this writes logged data; confirm the target day with the user first. Rows already present on toDay are skipped, so the call is idempotent, and the result reports the copied count. Inputs: fromDay and toDay (YYYY-MM-DD, must differ); fails with 404 when fromDay has no entries.",
+      description: "Copy a day's logged meals onto another day; confirm the target day first.",
       input: {
         type: "object",
         properties: {
@@ -750,8 +757,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<Record<string, never>>({
       name: "healthvault_record_types",
-      description:
-        "Read-only Apple record-type statistics: each type's unit, record count, first and last day, sum, average and maximum. No inputs.",
+      description: "Read Apple record-type statistics (counts, dates, sums, averages, maxima).",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.recordTypes(signal),
@@ -759,8 +765,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecordsRecentInput>({
       name: "healthvault_records_recent",
-      description:
-        "Read raw Apple Health rows for one record type, newest first. Rows are NOT de-duplicated across phone and watch — use metrics_series for daily totals. Inputs: type (record type identifier, required) and limit (default 50, max 500).",
+      description: "Read raw Apple Health rows for one record type, newest first.",
       input: {
         type: "object",
         properties: {
@@ -776,8 +781,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<UploadsRecentInput>({
       name: "healthvault_uploads_recent",
-      description:
-        "Read import history, newest first. Read-only: importing an Apple Health export stays a manual action. Inputs: limit (default 50, max 500).",
+      description: "Read import history, newest first; imports stay manual.",
       input: {
         type: "object",
         properties: {
@@ -791,8 +795,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementHistoryInput>({
       name: "healthvault_supplement_history",
-      description:
-        "Read supplement adherence: days with at least one logged dose, newest first, each with the doses taken. Read-only. Inputs: days (default 30, max 366).",
+      description: "Read supplement adherence days and doses taken.",
       input: {
         type: "object",
         properties: {
@@ -806,8 +809,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementDeleteInput>({
       name: "healthvault_supplement_delete",
-      description:
-        "Remove a supplement regimen, so this changes stored data; confirm with the user first. Archives the supplement when intake history exists (deleted false, archived true), otherwise permanently deletes it. Inputs: id (required).",
+      description: "Remove a supplement regimen (archives it when it has intake history).",
       input: {
         type: "object",
         properties: {
@@ -822,8 +824,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeCreateInput>({
       name: "healthvault_recipe_create",
-      description:
-        "Create a reusable composite dish. Totals are computed from the ingredients (per-100 g × grams), never stored twice; per serving = total / servings. Inputs: name, servings (default 2), note, ingredients (non-empty array of { foodId?, name?, grams, measure? }). Each ingredient needs grams or a household measure; foodId supplies its nutrition, while a name-only ingredient keeps its weight but is exposed as unresolved, marks the recipe incomplete, and makes logged servings estimated. Returns the recipe with total, perServing, complete and unresolvedIngredients.",
+      description: "Create a reusable composite dish from ingredients.",
       input: {
         type: "object",
         properties: {
@@ -854,8 +855,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeGetInput>({
       name: "healthvault_recipe_get",
-      description:
-        "Read one recipe with its resolved ingredients, total and per-serving macros, remaining servings and the servings already logged. Inputs: id (required).",
+      description: "Read a recipe with resolved ingredients, total and per-serving macros.",
       input: {
         type: "object",
         properties: {
@@ -870,8 +870,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeLogInput>({
       name: "healthvault_recipe_log",
-      description:
-        "Log one serving of a recipe as an immutable snapshot with one row per ingredient. Inputs: recipeId, meal, optional day (YYYY-MM-DD), servingNo (defaults to the next unlogged serving), servingFraction (default 1), eatenAt (ISO timestamp or epoch ms; no offset = profile timezone), note, and optional ingredientOverrides (this meal only; the recipe definition is not edited) plus amountBasis. amountBasis is required with overrides: 'batch' means override grams are for the whole recipe (divided by servings), 'serving' means they are already one serving. The per-serving values and every ingredient (food id, grams, measure, state, source, macros) are captured on the row, so later recipe edits or archiving never rewrite history. If the recipe has name-only ingredients the entry is saved with estimated macros and reports incomplete/unresolvedIngredients; a recipe with no food-resolved ingredients is rejected. This writes logged data.",
+      description: "Log one serving of a recipe as an immutable snapshot.",
       input: {
         type: "object",
         properties: {
@@ -904,8 +903,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeUpdateInput>({
       name: "healthvault_recipe_update",
-      description:
-        "Change a recipe; only the fields supplied change. Replacing ingredients never rewrites already logged entries. Inputs: id (required), name, servings, note, ingredients (replaces the whole list; each needs grams or measure, with foodId for nutrition, or name-only to store an unresolved ingredient). This edits stored recipe data.",
+      description: "Change a recipe; only the supplied fields change.",
       input: {
         type: "object",
         properties: {
@@ -937,8 +935,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeDeleteInput>({
       name: "healthvault_recipe_delete",
-      description:
-        "Remove a recipe. A recipe still referenced by logged entries or by historical child snapshots (for example a copy_day copy whose parent recipeId was cleared) is archived instead of destroyed (result: deleted false, archived true, with the reason, loggedEntries and snapshotIngredients): it leaves the active surface, but the logged snapshots stay readable and rescalable. An unreferenced recipe is deleted with its own ingredient rows. Inputs: id (required).",
+      description: "Remove a recipe (archives it when it has logged references).",
       input: {
         type: "object",
         properties: {
@@ -953,8 +950,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<Record<string, never>>({
       name: "healthvault_food_template_list",
-      description:
-        "Read the explicit food templates distilled from the real log: household grams (honey 1 kutsarita = 7 g, NESCAFÉ Gold 1 tbsp = 6 g, jumbo egg 1 piece = 60 g, KFC fry 1 strip = 2 g, whey 1 scoop = 32.4 g) and raw/dry yield factors (chicken breast 0.75, thigh/ground beef 0.70, rice 2.3, pulses 2.4, pasta 1.8, oats 2.3). Read-only; nothing is applied by name inference. No inputs.",
+      description: "List the saved household-measure and yield-factor food templates.",
       input: NO_INPUT,
       readOnly: true,
       run: (_input, signal) => client.foodTemplateList(signal),
@@ -962,8 +958,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodTemplateApplyInput>({
       name: "healthvault_food_template_apply",
-      description:
-        "Apply one named template to a specific saved food id: its household-measure grams and/or state + yield factor. This edits the food definition (never its macros or logged history). Existing per-unit overrides and a custom state/yield are kept unless overwrite is true. Use food_template_list for the exact template names; matching is exact, never by food name. Inputs: id (required), template (required slug), overwrite (default false).",
+      description: "Apply one named template to a saved food id.",
       input: {
         type: "object",
         properties: {
@@ -979,8 +974,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealGetInput>({
       name: "healthvault_meal_get",
-      description:
-        "Read one logged meal entry with its full historical snapshot: the aggregate row plus every ingredient (food id, grams, household measure, state, per-100 g values, macros, source metadata) captured at log time. `ingredientSnapshotComplete` is null for a plain food entry, true when the ingredient snapshot exists, and false for a legacy aggregate-only recipe row whose ingredients were never recorded. Inputs: id (required).",
+      description: "Read one logged meal entry with its full historical snapshot.",
       input: {
         type: "object",
         properties: {
@@ -995,8 +989,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodHistoryPreviewInput>({
       name: "healthvault_food_history_preview",
-      description:
-        "Preview corrections to already logged snapshots after a saved food's nutrition changed. Read-only: nothing is written. Scope with foodIds and/or entryIds (at least one), optionally fromDay/toDay. Returns each affected entry/ingredient with previous and proposed macros, plus a previewHash. Rows are skipped (never guessed) when the food is missing, the stored basis is unknown, or the food's state basis changed. Legacy aggregate-only recipe rows are not refreshed and are labelled incomplete by meal_get/nutrition_day.",
+      description: "Preview corrections to logged snapshots after a food's nutrition changed.",
       input: {
         type: "object",
         properties: HISTORY_SCOPE_PROPS,
@@ -1008,8 +1001,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodHistoryRefreshInput>({
       name: "healthvault_food_history_refresh",
-      description:
-        "Apply exactly the corrections a prior food_history_preview showed. Requires the same scope plus its previewHash; a stale or unseen preview is rejected with 409, and nothing outside the stated scope changes. Each changed row keeps a revision with its previous and new values. This edits logged data, so run the preview and confirm with the user first.",
+      description: "Apply a previewed correction by scope and previewHash.",
       input: {
         type: "object",
         properties: {
@@ -1029,8 +1021,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeListInput>({
       name: "healthvault_recipe_list",
-      description:
-        "List saved recipes, newest edit first, without loading their ingredients. Read-only. Inputs: query (optional name search), limit (default 20, max 100), includeArchived (default false — archived recipes are history). Returns items (id, name, servingsTotal, updatedAtMs, archived, complete, unresolvedCount) plus total, limit and offset. `complete: false` means at least one ingredient has no resolved food, so its nutrition is unknown, not zero; call recipe_get for macros.",
+      description: "List saved recipes without loading their ingredients.",
       input: {
         type: "object",
         properties: {

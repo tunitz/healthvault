@@ -30,7 +30,10 @@ import type {
 } from "@/lib/action-state";
 import { num, plural } from "@/lib/format";
 import {
+  defaultQuantity,
+  preferredUnit,
   recipeDraftFromRows,
+  recipeUnits,
   type RecipeDraft,
   type RecipeEditorIngredient,
   type RecipeFoodOption,
@@ -72,18 +75,23 @@ function FoodInput({ className, ...props }: ComponentProps<typeof Input>) {
   return <Input {...props} className={className ? `max-sm:h-11 ${className}` : "max-sm:h-11"} />;
 }
 
+/** Client-only key for a newly added Ingredient · Quantity · Unit row. */
 function emptyRow(key: string): RecipeEditorIngredient {
-  return {
-    key,
-    kind: "food",
-    foodId: null,
-    name: "",
-    amount: "grams",
-    grams: "",
-    measureName: "",
-    measureCount: "1",
-  };
+  return { key, foodId: null, name: "", quantity: "", unit: "g" };
 }
+
+/** New-recipe drafts survive the round trip to the food library; never store secrets in here. */
+const DRAFT_KEY = "healthvault:new-recipe-draft";
+/** Set by FoodForm when it was opened from this builder, so the new food can be auto-selected. */
+const CREATED_FOOD_KEY = "healthvault:recipe-created-food";
+
+type PersistedDraft = {
+  name: string;
+  servings: string;
+  note: string;
+  rows: RecipeEditorIngredient[];
+  foodCache: Record<number, RecipeFoodOption>;
+};
 
 /* ---------------------------------------------------------------------------------------------
  * Food picker (server-backed)
@@ -229,9 +237,16 @@ function FoodPicker({
               {error}
             </p>
           ) : results.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
-              No saved foods match. Switch to “Name only” to keep this ingredient unresolved.
-            </p>
+            <div className="px-3 py-2 text-xs">
+              <p className="text-muted-foreground">No saved foods match.</p>
+              <Link
+                href="/nutrition/foods?from=recipe"
+                className="mt-1 inline-block text-primary underline underline-offset-4"
+              >
+                Create a food in the library
+              </Link>
+              <span className="text-muted-foreground"> · you return here with it selected.</span>
+            </div>
           ) : (
             <ul aria-label={`Saved foods for ingredient ${index + 1}`} className="max-h-56 overflow-auto py-1">
               {results.map((food) => (
@@ -266,7 +281,7 @@ function IngredientRow({
   index,
   total,
   selected,
-  defaultMeasures,
+  sharedDefaults,
   onChange,
   onMove,
   onRemove,
@@ -277,19 +292,19 @@ function IngredientRow({
   index: number;
   total: number;
   selected: RecipeFoodOption | null;
-  defaultMeasures: Record<string, number>;
+  sharedDefaults: Record<string, number>;
   onChange: (patch: Partial<RecipeEditorIngredient>) => void;
   onMove: (delta: number) => void;
   onRemove: () => void;
   onSelectFood: (food: RecipeFoodOption) => void;
   onClearFood: () => void;
 }) {
-  const units = selected ? selected.measures : defaultMeasures;
-  const unitEntries = Object.entries(units).slice(0, 8);
-  const datalistId = `measure-units-${row.key}`;
+  // Only grams plus units this food actually declares — never a blind tbsp/cup default.
+  const units = selected ? recipeUnits(selected, sharedDefaults) : ["g"];
+  const needsLink = row.foodId === null && row.name.trim() !== "";
 
   return (
-    <li className="flex flex-col gap-3 rounded-xl border border-border p-3">
+    <li className="flex flex-col gap-2 rounded-xl border border-border p-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground">Ingredient {index + 1}</span>
         <span className="flex items-center gap-1">
@@ -328,92 +343,45 @@ function IngredientRow({
         </span>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start">
-        <Field label="Source">
-          <select
-            value={row.kind}
-            onChange={(event) => {
-              const kind = event.target.value as "food" | "name";
-              onChange({ kind, ...(kind === "name" ? { foodId: null } : {}) });
-            }}
-            className={SELECT}
-          >
-            <option value="food">Saved food</option>
-            <option value="name">Name only</option>
-          </select>
-        </Field>
-        <div className="flex min-w-0 flex-col gap-1">
-          {row.kind === "food" ? (
-            <FoodPicker index={index} selected={selected} onSelect={onSelectFood} onClear={onClearFood} />
-          ) : (
-            <Field label="Ingredient name" hint="Kept as written; nutrition stays unknown until a food is linked.">
-              <FoodInput
-                value={row.name}
-                maxLength={200}
-                placeholder="e.g. adobo sauce"
-                onChange={(event) => onChange({ name: event.target.value })}
-              />
-            </Field>
-          )}
-        </div>
-      </div>
+      {needsLink ? (
+        <p role="status" className="rounded-lg border border-warning/40 bg-warning/15 px-2.5 py-1.5 text-xs">
+          “{row.name}” has no linked food. Choose a saved food to keep it; its nutrition stays unknown
+          until then.
+        </p>
+      ) : null}
 
-      <div className="grid gap-2 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:items-start">
-        <Field label="Amount">
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_6rem] sm:items-end">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Ingredient</span>
+          <FoodPicker index={index} selected={selected} onSelect={onSelectFood} onClear={onClearFood} />
+        </div>
+        <Field label="Quantity" hint="Whole batch">
+          <FoodInput
+            type="number"
+            inputMode="decimal"
+            min={row.unit === "g" ? "0.1" : "0.01"}
+            max="20000"
+            step="any"
+            value={row.quantity}
+            placeholder={row.unit === "g" ? "100" : "1"}
+            disabled={row.foodId === null}
+            onChange={(event) => onChange({ quantity: event.target.value })}
+          />
+        </Field>
+        <Field label="Unit">
           <select
-            value={row.amount}
-            onChange={(event) => onChange({ amount: event.target.value as "grams" | "measure" })}
+            value={row.unit}
+            disabled={!selected}
+            onChange={(event) => onChange({ unit: event.target.value })}
             className={SELECT}
           >
-            <option value="grams">Grams</option>
-            <option value="measure">Household measure</option>
+            {units.map((unit) => (
+              <option key={unit} value={unit}>
+                {unit}
+              </option>
+            ))}
           </select>
         </Field>
-        {row.amount === "grams" ? (
-          <Field
-            label="Grams"
-            hint={row.kind === "food" ? "As stored in the food’s basis" : "Amount of the named ingredient"}
-          >
-            <FoodInput
-              type="number"
-              inputMode="decimal"
-              min="0.1"
-              max="20000"
-              step="any"
-              value={row.grams}
-              placeholder="100"
-              onChange={(event) => onChange({ grams: event.target.value })}
-            />
-          </Field>
-        ) : (
-          <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-end gap-2">
-            <Field label="Measure" hint={unitEntries.length > 0 ? `Available: ${unitEntries.map(([name, grams]) => `${name} ${num(grams)} g`).join(", ")}` : "Grams per unit come from the food or shared defaults."}>
-              <FoodInput
-                list={datalistId}
-                value={row.measureName}
-                maxLength={40}
-                placeholder="e.g. tbsp"
-                onChange={(event) => onChange({ measureName: event.target.value })}
-              />
-            </Field>
-            <Field label="Count">
-              <FoodInput
-                type="number"
-                inputMode="decimal"
-                min="0.01"
-                max="10000"
-                step="any"
-                value={row.measureCount}
-                onChange={(event) => onChange({ measureCount: event.target.value })}
-              />
-            </Field>
-            <datalist id={datalistId}>
-              {unitEntries.map(([name]) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </div>
-        )}
       </div>
     </li>
   );
@@ -552,14 +520,27 @@ export function RecipeEditor({
   const [state, formAction] = useActionState<RecipeFormState, FormData>(saveRecipeAction, {
     ok: true,
   });
-  const [name, setName] = useState(recipe?.name ?? "");
-  const [servings, setServings] = useState(String(recipe?.servingsTotal ?? 2));
-  const [note, setNote] = useState(recipe?.note ?? "");
+  // A new-recipe draft is restored after creating a missing food in the library. Editing an
+  // existing recipe always loads its stored definition instead.
+  const [restored] = useState<PersistedDraft | null>(() => {
+    if (recipe || typeof window === "undefined") return null;
+    try {
+      const raw = window.sessionStorage.getItem(DRAFT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as PersistedDraft;
+      return Array.isArray(parsed?.rows) && typeof parsed.name === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
+  const [name, setName] = useState(restored?.name ?? recipe?.name ?? "");
+  const [servings, setServings] = useState(restored?.servings ?? String(recipe?.servingsTotal ?? 2));
+  const [note, setNote] = useState(restored?.note ?? recipe?.note ?? "");
   const [rows, setRows] = useState<RecipeEditorIngredient[]>(
-    recipe?.ingredients.length ? recipe.ingredients : [emptyRow("new-0")],
+    restored?.rows ?? (recipe?.ingredients.length ? recipe.ingredients : [emptyRow("new-0")]),
   );
   const [foodCache, setFoodCache] = useState<Record<number, RecipeFoodOption>>(() =>
-    Object.fromEntries(initialFoods.map((food) => [food.id, food])),
+    restored?.foodCache ?? Object.fromEntries(initialFoods.map((food) => [food.id, food])),
   );
   const [preview, setPreview] = useState<{ key: string; result: RecipePreviewResult } | null>(null);
   const [previewing, startPreview] = useTransition();
@@ -599,8 +580,54 @@ export function RecipeEditor({
     return () => clearTimeout(timer);
   }, [draft, startPreview]);
 
+  // Best-effort draft persistence: no secrets go in here, and a failed write is harmless.
+  useEffect(() => {
+    if (recipe || typeof window === "undefined") return;
+    try {
+      const draftToSave: PersistedDraft = { name, servings, note, rows, foodCache };
+      window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draftToSave));
+    } catch {
+      // Storage may be unavailable or full; the form still works without a preserved draft.
+    }
+  }, [recipe, name, servings, note, rows, foodCache]);
+
+  // Returning from "Create a food in the library": auto-select the new food into the first
+  // unassigned ingredient row. The draft itself survives in sessionStorage, so only the id
+  // needs to cross the round trip. Never leave a stale id behind for a later recipe.
+  useEffect(() => {
+    if (recipe) return;
+    let createdId: number | null = null;
+    try {
+      const raw = window.localStorage.getItem(CREATED_FOOD_KEY);
+      window.localStorage.removeItem(CREATED_FOOD_KEY);
+      if (raw && /^\d+$/.test(raw)) createdId = Number(raw);
+    } catch {
+      return;
+    }
+    if (createdId === null) return;
+    let active = true;
+    void searchRecipeFoodsAction("").then((result) => {
+      if (!active || !result.ok) return;
+      const food = result.items.find((item) => item.id === createdId);
+      if (!food) return;
+      const target = rows.find((row) => row.foodId === null);
+      if (!target) return;
+      selectFood(target.key, food);
+      toast.success(`${food.name} added to the recipe`);
+    });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe]);
+
   useEffect(() => {
     if (!state.ok || state.recipeId === undefined) return;
+    try {
+      window.sessionStorage.removeItem(DRAFT_KEY);
+    } catch {
+      // Saving succeeded; a stale draft left behind by blocked storage is not a failure.
+    }
     toast.success(state.mode === "update" ? "Recipe updated" : "Recipe saved", {
       description: "Already-logged meals keep their own ingredient snapshots.",
     });
@@ -636,24 +663,25 @@ export function RecipeEditor({
     setLocalError(null);
     setFoodCache((current) => ({ ...current, [food.id]: food }));
     setRows((current) =>
-      current.map((row) =>
-        row.key === key
-          ? {
-              ...row,
-              kind: "food",
-              foodId: food.id,
-              name: food.name,
-              // A visible, editable default is safer than an empty amount that fails on submit.
-              grams: row.grams === "" ? String(food.servingGrams) : row.grams,
-              measureName:
-                row.amount === "measure"
-                  ? food.measures[row.measureName] !== undefined
-                    ? row.measureName
-                    : Object.keys(food.measures)[0] ?? ""
-                  : row.measureName,
-            }
-          : row,
-      ),
+      current.map((row) => {
+        if (row.key !== key) return row;
+        // Selecting a food supplies its preferred unit and a visible default quantity, so a
+        // 2-egg or 3-clove entry needs no manual gram arithmetic. An amount already entered (for
+        // example on a legacy grams row being linked) keeps its unit so the number is not
+        // reinterpreted as a different item.
+        const validUnits = recipeUnits(food, defaultMeasures);
+        const unit =
+          row.quantity !== "" && validUnits.includes(row.unit)
+            ? row.unit
+            : preferredUnit(food, defaultMeasures);
+        return {
+          ...row,
+          foodId: food.id,
+          name: food.name,
+          unit,
+          quantity: row.quantity === "" ? String(defaultQuantity(food, unit)) : row.quantity,
+        };
+      }),
     );
   }
 
@@ -705,7 +733,7 @@ export function RecipeEditor({
         </Field>
       </div>
 
-      <Field label="Note" hint="Optional">
+      <Field label="Description" hint="Optional">
         <FoodInput
           name="note"
           maxLength={2000}
@@ -718,7 +746,9 @@ export function RecipeEditor({
       <section className="flex flex-col gap-2" aria-label="Ingredients">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium">Ingredients</h2>
-          <span className="text-xs text-muted-foreground">{plural(rows.length, "ingredient")}</span>
+          <span className="text-xs text-muted-foreground">
+            {plural(rows.length, "ingredient")} · amounts are for the whole batch
+          </span>
         </div>
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">Add at least one ingredient.</p>
@@ -731,7 +761,7 @@ export function RecipeEditor({
                 index={index}
                 total={rows.length}
                 selected={row.foodId === null ? null : foodCache[row.foodId] ?? null}
-                defaultMeasures={defaultMeasures}
+                sharedDefaults={defaultMeasures}
                 onChange={(patch) => updateRow(row.key, patch)}
                 onMove={(delta) => moveRow(index, delta)}
                 onRemove={() => {
@@ -739,7 +769,7 @@ export function RecipeEditor({
                   setRows((current) => current.filter((item) => item.key !== row.key));
                 }}
                 onSelectFood={(food) => selectFood(row.key, food)}
-                onClearFood={() => updateRow(row.key, { foodId: null, kind: "name" })}
+                onClearFood={() => updateRow(row.key, { foodId: null })}
               />
             ))}
           </ol>
@@ -756,7 +786,7 @@ export function RecipeEditor({
         <h2 className="text-sm font-medium">Totals</h2>
         {!draft.ok ? (
           <p className="text-xs text-muted-foreground">
-            Totals appear once every ingredient has a food or name and an amount. {draft.error}.
+            Totals appear once every ingredient has a saved food and a quantity. {draft.error}.
           </p>
         ) : previewing || previewPending ? (
           <p role="status" className="text-xs text-muted-foreground">
@@ -782,7 +812,18 @@ export function RecipeEditor({
 
       <div className="flex items-center justify-end gap-2">
         <Button asChild variant="ghost" size="sm">
-          <Link href={cancelHref}>Cancel</Link>
+          <Link
+            href={cancelHref}
+            onClick={() => {
+              try {
+                window.sessionStorage.removeItem(DRAFT_KEY);
+              } catch {
+                // Best-effort cleanup; nothing sensitive is stored.
+              }
+            }}
+          >
+            Cancel
+          </Link>
         </Button>
         <SubmitButton size="sm" pendingLabel="Saving…">{recipe ? "Save changes" : "Save recipe"}</SubmitButton>
       </div>

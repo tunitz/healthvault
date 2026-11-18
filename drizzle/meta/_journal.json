@@ -50,6 +50,27 @@
       "when": 1794536533634,
       "tag": "0006_whey_action_association",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794922729660,
+      "tag": "0007_classy_chameleon",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794924516046,
+      "tag": "0008_broken_daimon_hellstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794959898100,
+      "tag": "0009_strong_colleen_wing",
+      "breakpoints": true
     }
   ]
 }

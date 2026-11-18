@@ -18,13 +18,22 @@ const STAGE_KEY: Record<number, (typeof KEYS)[number]> = {
   1: "inBed", 2: "asleep", 3: "awake", 4: "core", 5: "deep", 6: "rem",
 };
 
-export function SleepStackChart({ data }: { data: { day: string; stage: number; hours: number }[] }) {
+// Apple sleep codes that count as asleep: 2 Asleep, 4 Core, 5 Deep, 6 REM. InBed (1) is a
+// superset of asleep time and Awake (3) is wake time, so neither belongs in an hours-asleep
+// total. This mirrors ASLEEP / sleepSummary() in src/db/queries.ts. Awake stays in the stacked
+// stage view below — it is only excluded from the average.
+const ASLEEP_KEYS = new Set<(typeof KEYS)[number]>(["asleep", "core", "deep", "rem"]);
+
+export type SleepStageRow = { day: string; stage: number; hours: number };
+
+/** Fold raw (night, stage, hours) rows into chart rows plus a corrected hours-asleep average. */
+export function sleepStageSummary(data: SleepStageRow[]) {
   const byDay = new Map<string, Record<string, number | string>>();
   for (const r of data) {
     const key = STAGE_KEY[r.stage];
     if (!key) continue;
     const row = byDay.get(r.day) ?? { day: r.day };
-    row[key] = (Number(row[key] ?? 0) + r.hours);
+    row[key] = Number(row[key] ?? 0) + r.hours;
     byDay.set(r.day, row);
   }
   const rows = [...byDay.values()].map((row) => {
@@ -34,19 +43,28 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
   });
 
   const present = KEYS.filter((k) => rows.some((r) => Number(r[k]) > 0));
-  const nightTotals = rows.map((row) =>
-    KEYS.filter((key) => key !== "inBed").reduce((sum, key) => sum + Number(row[key]), 0),
-  );
-  const avgHours = nightTotals.length
-    ? nightTotals.reduce((sum, hours) => sum + hours, 0) / nightTotals.length
+
+  // Only asleep stages enter the total. Nights with no asleep stage are left out of the
+  // denominator, matching sleepSummary()'s COUNT(DISTINCT night) over ASLEEP rows.
+  const asleepTotals = rows
+    .map((row) => [...ASLEEP_KEYS].reduce((sum, key) => sum + Number(row[key]), 0))
+    .filter((hours) => hours > 0);
+  const avgHours = asleepTotals.length
+    ? asleepTotals.reduce((sum, hours) => sum + hours, 0) / asleepTotals.length
     : 0;
+
+  return { rows, present, avgHours, nightCount: asleepTotals.length };
+}
+
+export function SleepStackChart({ data }: { data: SleepStageRow[] }) {
+  const { rows, present, avgHours, nightCount } = sleepStageSummary(data);
 
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-col gap-0.5">
         <h2 className="text-sm font-medium">Sleep by stage</h2>
         <p className="line-clamp-2 min-h-8 text-xs text-muted-foreground">
-          Hours asleep per night; InBed rows are excluded
+          Hours asleep per night; InBed and Awake rows are excluded
         </p>
       </div>
       {present.length === 0 ? (
@@ -95,7 +113,7 @@ export function SleepStackChart({ data }: { data: { day: string; stage: number; 
       )}
       {present.length ? (
         <p className="text-xs text-muted-foreground">
-          Average {r2(avgHours, 1)} h over {rows.length} nights.
+          Average {r2(avgHours, 1)} h over {nightCount} nights.
         </p>
       ) : null}
     </section>

@@ -19,17 +19,18 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { createClient } from "./client";
-import { createToolDefinitions, type ToolDefinition } from "./definitions";
+import {
+  createToolDefinitions,
+  INSTRUCTIONS,
+  SERVER_NAME,
+  SERVER_VERSION,
+  type ToolDefinition,
+} from "./definitions";
 import { resolveBaseUrl, resolveTimeoutMs } from "./server";
 
-const SERVER_NAME = "healthvault";
-const SERVER_VERSION = "0.1.0";
-
-const INSTRUCTIONS = [
-  "Start every session with healthvault_context so answers use the user's current profile, timezone and today's local day, today's nutrition, weight trend, supplements, strength detail, training (including the current-week summary), and data freshness.",
-  "Confirm destructive actions with the user first: deletes (healthvault_meal_delete, healthvault_food_delete, healthvault_measurement_delete, healthvault_supplement_delete) and the target day of healthvault_copy_day. healthvault_recipe_delete archives a recipe that has logged history instead of deleting it. For past-meal corrections after a food's nutrition changed, run healthvault_food_history_preview and confirm the exact rows before healthvault_food_history_refresh.",
-  "Apple Health imports stay a manual user action: tools only read imported data, and healthvault_uploads_recent shows import history.",
-].join(" ");
+// Re-exported from the SDK-free definitions module so the in-app HTTP transport can share the
+// exact instructions and tool list without importing this SDK-bound stdio entry point.
+export { INSTRUCTIONS };
 
 function errorText(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -105,9 +106,13 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(
-    `healthvault-mcp failed to start: ${errorText(error, "unknown error")}\n`,
-  );
-  process.exit(1);
-});
+// Only start the stdio transport when run as the CLI entry point; importing this module
+// (for example from a test that inspects INSTRUCTIONS) must not connect a transport.
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `healthvault-mcp failed to start: ${errorText(error, "unknown error")}\n`,
+    );
+    process.exit(1);
+  });
+}

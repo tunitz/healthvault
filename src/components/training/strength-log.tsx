@@ -269,8 +269,9 @@ function Progression({
             Best load and reps × load volume per Sunday-start week.
           </p>
         </div>
+        {/* The picker submits to the current URL, so it works on /training and /training/strength. */}
         {exercises.length > 0 ? (
-          <form method="get" action="/training" className="flex flex-wrap items-end gap-2">
+          <form method="get" className="flex flex-wrap items-end gap-2">
             {weekOffset > 0 ? <input type="hidden" name="week" value={weekOffset} /> : null}
             <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
               <span>Exercise</span>

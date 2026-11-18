@@ -51,6 +51,34 @@ function clockOf(value: string): string {
   return value.slice(11, 16);
 }
 
+/** Actionable, human-readable reason a records fetch failed. `null` means a network-level
+ * failure with no HTTP status. Kept pure so the error text can be asserted without a browser. */
+export function explorerFetchError(status: number | null): string {
+  if (status === null) return "Could not reach the server. Check your connection and retry.";
+  if (status === 401 || status === 403) return "Your session expired. Sign in again and retry.";
+  if (status >= 500) return `The server could not load these records (${status}). Try again shortly.`;
+  return `Could not load these records (${status}). Retry.`;
+}
+
+/** Visible failure state: a message and a full-height Retry target, never a silent empty table. */
+export function ExplorerError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/5 px-4 py-5"
+    >
+      <p className="text-sm text-destructive">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="min-h-11 rounded-md border border-input bg-background px-4 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export function ExplorerClient({
   types,
   initial,
@@ -62,27 +90,39 @@ export function ExplorerClient({
   const [result, setResult] = useState<{ type: string; rows: ExplorerRow[] }>(initial);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   // Loading is derived: the rows on screen belong to `result.type`, so a different selection
   // is "loading" without a synchronous setState inside the effect. The first type is already
-  // rendered by the server, so its request is skipped.
+  // rendered by the server, so its request is skipped. A failed fetch sets `error` instead of
+  // silently substituting an empty result, so the failure stays visible until Retry succeeds.
   useEffect(() => {
     if (!selected || result?.type === selected) return;
     let cancelled = false;
     fetch(`/api/type-stats?type=${encodeURIComponent(selected)}`)
-      .then((r) => r.json())
-      .then((body: { rows: ExplorerRow[] }) => {
-        if (!cancelled) setResult({ type: selected, rows: body.rows });
+      .then((r) => {
+        if (!r.ok) {
+          if (!cancelled) setError(explorerFetchError(r.status));
+          return null;
+        }
+        return r.json() as Promise<{ rows: ExplorerRow[] }>;
+      })
+      .then((body) => {
+        if (!cancelled && body) {
+          setResult({ type: selected, rows: body.rows });
+          setError(null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setResult({ type: selected, rows: [] });
+        if (!cancelled) setError(explorerFetchError(null));
       });
     return () => {
       cancelled = true;
     };
-  }, [selected, result?.type]);
+  }, [selected, result?.type, attempt]);
 
-  const loading = Boolean(selected) && result?.type !== selected;
+  const loading = Boolean(selected) && result?.type !== selected && !error;
   const rows = result?.rows ?? [];
   const stats = types.find((t) => t.typeIdentifier === selected);
 
@@ -147,6 +187,7 @@ export function ExplorerClient({
                         setSelected(type.typeIdentifier);
                         setOpen(false);
                         setQuery("");
+                        setError(null);
                       }}
                       className={cn(
                         "flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-accent",
@@ -191,7 +232,15 @@ export function ExplorerClient({
               : ""}
           </p>
         </div>
-        {loading ? (
+        {error ? (
+          <ExplorerError
+            message={error}
+            onRetry={() => {
+              setError(null);
+              setAttempt((value) => value + 1);
+            }}
+          />
+        ) : loading ? (
           <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
             <Spinner /> Loading…
           </div>

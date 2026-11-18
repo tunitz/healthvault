@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState, useTransition, type ReactNode } from "react";
-import { ChevronDown, History } from "lucide-react";
+import { ChevronDown, History, Plus } from "lucide-react";
 import { deleteEntryAction, entryRevisionsAction, updateEntryAction, updateLegacyEntryAction, updatePortionAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
@@ -580,9 +580,12 @@ function EntryCard({ entry, timezone }: { entry: LoggedIngredientEntry; timezone
 export function MealList({
   meals,
   timezone,
+  onAddToMeal,
 }: {
   meals: Record<Meal, LoggedIngredientEntry[]>;
   timezone: string;
+  /** Opens the Add-food draft with this meal preselected. */
+  onAddToMeal?: (meal: Meal) => void;
 }) {
   const totals = useMemo(() => {
     const map = {} as Record<Meal, number>;
@@ -600,7 +603,22 @@ export function MealList({
           <section key={key} className="min-w-0 rounded-xl border border-border p-4" aria-labelledby={`meal-${key}`}>
             <div className="flex items-baseline justify-between gap-3">
               <h2 id={`meal-${key}`} className="text-sm font-medium">{label}</h2>
-              <span className="num text-xs text-muted-foreground">{num(totals[key], 0)} kcal</span>
+              <div className="flex items-center gap-2">
+                <span className="num text-xs text-muted-foreground">{num(totals[key], 0)} kcal</span>
+                {onAddToMeal ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onAddToMeal(key)}
+                    className="h-11 px-2 text-xs sm:h-8"
+                    aria-label={`Add food to ${label}`}
+                  >
+                    <Plus aria-hidden />
+                    Add
+                  </Button>
+                ) : null}
+              </div>
             </div>
 
             {entries.length === 0 ? (

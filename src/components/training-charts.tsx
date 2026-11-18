@@ -76,7 +76,7 @@ const NO_RANGE = "No data in this range";
 
 function Chart({ label, children }: { label: string; children: React.ReactElement }) {
   return (
-    <div role="img" aria-label={label} className="h-[200px] w-full sm:h-[260px]">
+    <div role="img" aria-label={label} className="h-[200px] w-full min-w-0 sm:h-[260px]">
       <ResponsiveContainer width="100%" height="100%">
         {children}
       </ResponsiveContainer>

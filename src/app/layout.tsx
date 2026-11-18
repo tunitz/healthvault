@@ -42,15 +42,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           Skip to content
         </a>
         <ThemeProvider>
-          <AppNav />
+          {/* AppNav owns the header, grouped sidebar and mobile bar so the collapse state can
+              drive the content width directly. On /login it renders children without chrome. */}
+          <AppNav>
+            <main
+              id="main"
+              tabIndex={-1}
+              className="min-w-0 flex-1 scroll-mt-[calc(3.5rem+env(safe-area-inset-top))] px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))] outline-none sm:px-6 md:pb-10 lg:px-8"
+            >
+              {children}
+            </main>
+          </AppNav>
           <SwRegister />
-          <main
-            id="main"
-            tabIndex={-1}
-            className="mx-auto w-full max-w-6xl flex-1 scroll-mt-[calc(3.5rem+env(safe-area-inset-top))] px-4 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))] outline-none md:px-6 md:pb-10"
-          >
-            {children}
-          </main>
           <Toaster />
         </ThemeProvider>
       </body>

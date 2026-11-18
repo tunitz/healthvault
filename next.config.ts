@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
   },
   // Next 16 blocks dev resources for origins it doesn't know; the smoke tests and
   // browser checks hit 127.0.0.1 instead of localhost.
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
+  allowedDevOrigins: ["127.0.0.1", "localhost", "192.168.31.10", "100.67.153.70"],
   async headers() {
     return [
       {

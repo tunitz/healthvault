@@ -1,6 +1,6 @@
 // Health Vault service worker: read-only offline cache.
 // Bump VERSION whenever cache layout or caching rules change.
-const VERSION = "v3";
+const VERSION = "v4";
 const CACHE = `healthvault-${VERSION}`;
 const NETWORK_TIMEOUT_MS = 4000;
 const OFFLINE_HTML = `<!doctype html>
@@ -107,8 +107,13 @@ self.addEventListener("fetch", (event) => {
   // API responses are live data: caching them made the Explorer show yesterday's numbers
   // (and /api/type-stats is a ~1M-row scan, so it must not be replayed from a stale cache).
   if (url.pathname.startsWith("/api/")) return;
-  // Sign-in is session state and must always hit the network.
-  if (url.pathname === "/login" || url.pathname.startsWith("/login/")) return;
+  // Sign-in, first-run setup and security settings are session/credential state and must always
+  // hit the network — a cached setup screen must never survive setup or a password change.
+  if (
+    url.pathname === "/login" || url.pathname.startsWith("/login/") ||
+    url.pathname === "/setup" || url.pathname.startsWith("/setup/") ||
+    url.pathname === "/settings" || url.pathname.startsWith("/settings/")
+  ) return;
 
   if (isStaticAsset(url)) {
     event.respondWith(cacheFirst(request));

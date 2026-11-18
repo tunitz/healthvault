@@ -60,6 +60,7 @@ import {
 import { recentUploads, recordsForType, typeStats, workoutHistory } from "@/db/queries";
 import { currentDay } from "@/lib/services/context";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
+import { mcpAccessFailure } from "@/lib/services/mcp";
 import { ValidationError, dayField, enumField, fail, numField, readJson, str } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -77,7 +78,8 @@ const limitField = (value: unknown, fallback: number, max: number) =>
  * UI's own writes go through the same service layer, so both validate identically.
  */
 const TOOLS = {
-  healthvault_context: () => healthvaultContext(),
+  healthvault_context: (body: Record<string, unknown>) =>
+    healthvaultContext(Array.isArray(body.sections) ? body.sections : undefined),
 
   profile_get: () => {
     const profile = getProfile();
@@ -177,9 +179,22 @@ const TOOLS = {
   food_history_refresh: (body: Record<string, unknown>) => applyHistoryRefresh(body),
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
+/**
+ * In-process dispatch for the app's direct Streamable HTTP MCP transport. It calls the very same
+ * tool map the HTTP agent API uses, so execution (and contract) cannot drift between transports.
+ * Auth, Host/Origin and MCP-enablement checks stay in the route/proxy, not here.
+ */
+export async function dispatchAgentTool(tool: string, body: Record<string, unknown>): Promise<unknown> {
+  const handler = TOOLS[tool as AgentTool];
+  if (!handler) fail(`unknown tool: ${tool}`, 404);
+  return handler(body);
+}
+
 export async function GET(req: Request) {
   const failure = agentRequestFailure(req);
   if (failure) return NextResponse.json({ error: failure.error }, { status: failure.status });
+  const access = mcpAccessFailure(req);
+  if (access) return NextResponse.json({ error: access.error }, { status: access.status });
   return NextResponse.json({
     tools: AGENT_TOOLS,
     posture: "single-user; bearer token or session required; Host/Origin checked",
@@ -189,6 +204,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request, ctx: { params: Promise<{ tool: string }> }) {
   const failure = agentRequestFailure(req);
   if (failure) return NextResponse.json({ error: failure.error }, { status: failure.status });
+  const access = mcpAccessFailure(req);
+  if (access) return NextResponse.json({ error: access.error }, { status: access.status });
 
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
     return NextResponse.json({ error: "content-type must be application/json" }, { status: 415 });

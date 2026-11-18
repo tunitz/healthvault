@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState, type ComponentProps } from "react";
+import { useActionState, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { deleteFoodAction, saveFoodAction } from "@/app/actions";
@@ -13,7 +13,7 @@ import type { ActionState, FoodFormState } from "@/lib/action-state";
 import type { FoodFormValues } from "@/lib/foods-ui";
 
 const SELECT =
-  "h-8 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "h-11 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const STATES = [
   { value: "raw", label: "Raw" },
@@ -45,6 +45,27 @@ function FoodInput(props: ComponentProps<typeof Input>) {
   );
 }
 
+function Section({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="rounded-lg border border-border">
+      <summary className="cursor-pointer px-3 py-3 text-sm font-medium">
+        {title}
+        {summary ? <span className="ml-2 text-xs font-normal text-muted-foreground">{summary}</span> : null}
+      </summary>
+      <div className="flex flex-col gap-3 border-t border-border p-3">{children}</div>
+    </details>
+  );
+}
+
+/** One food editor, used by both the daily New-food action and the Foods library. */
 export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHref: string }) {
   const router = useRouter();
   const [state, formAction] = useActionState<FoodFormState, FormData>(saveFoodAction, { ok: true });
@@ -72,6 +93,18 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
       return;
     }
     if (state.mode === "create") {
+      // Opened from the recipe builder: hand the new id back so it can be auto-selected while
+      // the recipe draft (kept in sessionStorage) stays intact.
+      if (new URLSearchParams(window.location.search).get("from") === "recipe") {
+        try {
+          window.localStorage.setItem("healthvault:recipe-created-food", String(foodId));
+        } catch {
+          // Blocked storage only loses auto-selection; the food itself is saved.
+        }
+        toast.success("Food saved — returning to recipe");
+        router.push("/nutrition/recipes/new");
+        return;
+      }
       toast.success("Food saved");
     }
   }, [state, router]);
@@ -86,7 +119,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
   const basisChanged = food !== undefined && basis !== food.state;
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form action={formAction} className="flex flex-col gap-3">
       {food ? (
         <>
           <input type="hidden" name="id" value={food.id} />
@@ -94,6 +127,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
         </>
       ) : null}
 
+      {/* Essential fields first. */}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Name">
           <FoodInput name="name" required maxLength={200} defaultValue={food?.name ?? ""} />
@@ -101,10 +135,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
         <Field label="Brand" hint="Optional">
           <FoodInput name="brand" maxLength={200} defaultValue={food?.brand ?? ""} />
         </Field>
-        <Field label="Barcode" hint="Optional">
-          <FoodInput name="barcode" maxLength={64} defaultValue={food?.barcode ?? ""} />
-        </Field>
-        <Field label="Serving weight (g)" hint="Default portion for quick logging">
+        <Field label="Serving weight (g)" hint="Default portion for logging">
           <FoodInput
             name="servingGrams"
             type="number"
@@ -118,7 +149,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
       </div>
 
       <fieldset className="flex flex-col gap-3">
-        <legend className="text-sm font-medium">Per 100 g</legend>
+        <legend className="text-sm font-medium">Nutrition per 100 g</legend>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Field label="kcal">
             <FoodInput
@@ -161,6 +192,11 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
               defaultValue={food?.fatPer100g ?? 0}
             />
           </Field>
+        </div>
+      </fieldset>
+
+      <Section title="Optional nutrients" summary="Fibre, sodium">
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Fibre (g)">
             <FoodInput
               name="fibreG"
@@ -182,52 +218,53 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
             />
           </Field>
         </div>
-      </fieldset>
+      </Section>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Basis">
-          <select
-            name="state"
-            value={basis}
-            onChange={(event) => setBasis(event.target.value)}
-            className={SELECT}
-          >
-            {stateOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {showYield ? (
-          <Field
-            label="Yield factor"
-            hint={basis === "raw" ? "Cooked g per raw g" : "Cooked g per dry g"}
-          >
-            <FoodInput
-              name="yieldFactor"
-              type="number"
-              inputMode="decimal"
-              step="any"
-              min="0.01"
-              max="10"
-              value={yieldFactor}
-              onChange={(event) => setYieldFactor(event.target.value)}
-            />
+      <Section title="Basis & yield" summary={STATES.find((option) => option.value === basis)?.label ?? basis}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Basis">
+            <select
+              name="state"
+              value={basis}
+              onChange={(event) => setBasis(event.target.value)}
+              className={SELECT}
+            >
+              {stateOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </Field>
-        ) : null}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {BASIS_EXPLANATION[basis] ?? "Per-100 g values in the stored basis."}
-      </p>
-      {basisChanged ? (
-        <p role="status" className="text-xs text-destructive">
-          Changing the basis does not convert the stored values.
+          {showYield ? (
+            <Field
+              label="Yield factor"
+              hint={basis === "raw" ? "Cooked g per raw g" : "Cooked g per dry g"}
+            >
+              <FoodInput
+                name="yieldFactor"
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min="0.01"
+                max="10"
+                value={yieldFactor}
+                onChange={(event) => setYieldFactor(event.target.value)}
+              />
+            </Field>
+          ) : null}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {BASIS_EXPLANATION[basis] ?? "Per-100 g values in the stored basis."}
         </p>
-      ) : null}
+        {basisChanged ? (
+          <p role="status" className="text-xs text-destructive">
+            Changing the basis does not convert the stored values.
+          </p>
+        ) : null}
+      </Section>
 
-      <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium">Household measures</legend>
+      <Section title="Household measures" summary="Units valid for this food">
         <p className="text-xs text-muted-foreground">
           Per-food grams per unit. Shared defaults still apply to units you do not list.
         </p>
@@ -286,40 +323,41 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
           </div>
         ))}
         <div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setRows((current) => [...current, { name: "", grams: "" }])}>
+          <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => setRows((current) => [...current, { name: "", grams: "" }])}>
             <Plus aria-hidden />
             Add measure
           </Button>
         </div>
-      </fieldset>
+      </Section>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Source">
-          <select name="source" defaultValue={food?.source ?? "manual"} className={SELECT}>
-            {sources.map((source) => (
-              <option key={source} value={source}>
-                {source}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Source date" hint="When the values were read">
-          <FoodInput name="sourceDate" type="date" defaultValue={food?.sourceDate ?? ""} />
-        </Field>
-        <Field label="Source URL" hint="Optional" className="sm:col-span-2">
-          <FoodInput name="sourceUrl" type="url" maxLength={500} defaultValue={food?.sourceUrl ?? ""} />
-        </Field>
-      </div>
-
-      <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0">
-        <input
-          type="checkbox"
-          name="estimated"
-          defaultChecked={food?.estimated ?? false}
-          className="size-4 accent-[var(--primary)]"
-        />
-        Values are estimates
-      </label>
+      <Section title="Provenance" summary={food?.estimated ? "Source · estimated" : "Source and confidence"}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Source">
+            <select name="source" defaultValue={food?.source ?? "manual"} className={SELECT}>
+              {sources.map((source) => (
+                <option key={source} value={source}>
+                  {source}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Source date" hint="When the values were read">
+            <FoodInput name="sourceDate" type="date" defaultValue={food?.sourceDate ?? ""} />
+          </Field>
+          <Field label="Source URL" hint="Optional" className="sm:col-span-2">
+            <FoodInput name="sourceUrl" type="url" maxLength={500} defaultValue={food?.sourceUrl ?? ""} />
+          </Field>
+        </div>
+        <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground sm:min-h-0">
+          <input
+            type="checkbox"
+            name="estimated"
+            defaultChecked={food?.estimated ?? false}
+            className="size-4 accent-[var(--primary)]"
+          />
+          Values are estimates
+        </label>
+      </Section>
 
       {state.error ? (
         <p role="alert" className="text-xs text-destructive">
@@ -329,11 +367,11 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
 
       <div className="flex items-center justify-end gap-2">
         {food ? (
-          <Button asChild variant="ghost" size="sm">
+          <Button asChild variant="ghost" size="sm" className="min-h-11">
             <Link href={cancelHref}>Cancel</Link>
           </Button>
         ) : null}
-        <SubmitButton size="sm">{food ? "Save changes" : "Save food"}</SubmitButton>
+        <SubmitButton size="sm" className="min-h-11">{food ? "Save changes" : "Save food"}</SubmitButton>
       </div>
     </form>
   );

@@ -16,6 +16,25 @@ export type MeasureInput = { name: string; count: number };
 /** A positive grams-per-unit override map keyed by lower-case measure name. */
 export type MeasuresMap = Record<string, number>;
 
+/**
+ * Volume-only units have no universal mass. Never resolve them by assuming water density
+ * (1 ml = 1 g) — only a verified per-food grams-per-unit override may do that, and grams are
+ * always accepted. Kept as an explicit set so a future row in `measures` cannot reintroduce
+ * the assumption by accident.
+ */
+const VOLUME_ONLY_UNITS = new Set([
+  "ml",
+  "l",
+  "liter",
+  "litre",
+  "fl oz",
+  "floz",
+  "fluid ounce",
+  "gallon",
+  "pint",
+  "quart",
+]);
+
 export function parseMeasure(value: unknown, label = "measure"): MeasureInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     fail(`${label} must be an object like { name, count }`);
@@ -72,6 +91,12 @@ export function resolveMeasureGrams(
   const override = foodMeasureOverrides(foodMeasuresJson)[name];
   if (typeof override === "number") {
     return { name, count, grams: cappedGrams(count * override, name, label), source: "food" };
+  }
+  if (VOLUME_ONLY_UNITS.has(name)) {
+    fail(
+      `measure "${name}" has no verified mass for this food; configure a grams-per-${name} value on the food or use grams (never assumes 1 ml = 1 g)`,
+      400,
+    );
   }
   const row = db
     .select()
