@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -11,9 +12,21 @@ import { orderedVisibleWidgets } from "@/components/dashboard/registry";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: { absolute: "Dashboard · Health Vault" } };
+export const metadata: Metadata = { title: { absolute: "Dashboard · HealthVault" } };
 
-export default function DashboardPage() {
+function DashboardSkeleton() {
+  return (
+    <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading dashboard">
+      <div className="h-8 w-40 rounded-md bg-muted" />
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="h-44 rounded-xl border border-border bg-muted/30" />
+        <div className="h-44 rounded-xl border border-border bg-muted/30" />
+      </div>
+    </div>
+  );
+}
+
+function DashboardContent() {
   const context = healthvaultContext();
   const settings = getSettings().value;
 
@@ -47,8 +60,16 @@ export default function DashboardPage() {
   }
 
   const widgets = settings.dashboard.widgets;
-  const usedRanges = orderedVisibleWidgets(widgets).map(({ pref }) => pref.range);
-  const data = loadDashboardData(context, usedRanges);
+  const visible = orderedVisibleWidgets(widgets);
+  const data = loadDashboardData(context, visible);
 
   return <Dashboard context={context} data={data} widgets={widgets} />;
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<DashboardSkeleton />}>
+      <DashboardContent />
+    </Suspense>
+  );
 }

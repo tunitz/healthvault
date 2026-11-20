@@ -159,7 +159,11 @@ describe("direct Streamable HTTP MCP methods", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { result: Record<string, unknown> };
     expect(body.result.serverInfo).toEqual({ name: "healthvault", version: "0.1.0" });
-    expect(body.result.capabilities).toEqual({ tools: { listChanged: false } });
+    expect(body.result.capabilities).toEqual({
+      tools: { listChanged: false },
+      resources: { subscribe: false, listChanged: false },
+      prompts: { listChanged: false },
+    });
     expect(String(body.result.instructions)).toContain("do not call it for greetings");
   });
 
@@ -174,30 +178,153 @@ describe("direct Streamable HTTP MCP methods", () => {
     expect(await response.text()).toBe("");
   });
 
-  test("tools/list serves all 38 contracts with stable names", () => {
-    const names = mcpToolDefinitions().map((definition) => definition.name);
-    expect(names).toHaveLength(38);
+  test("tools/list serves all 53 contracts with stable names and annotations", () => {
+    const defs = mcpToolDefinitions();
+    const names = defs.map((definition) => definition.name);
+    expect(names).toHaveLength(53);
     const expected = AGENT_TOOLS.map((tool) =>
       tool.startsWith("healthvault_") ? tool : `healthvault_${tool}`,
     );
     expect(names).toEqual(expected);
+    for (const def of defs) {
+      expect(def.annotations.openWorldHint).toBe(false);
+    }
   });
 
-  test("tools/call dispatches to the agent tool map and maps failures to isError", async () => {
+  test("tools/call dispatches in-process with compact JSON and structuredContent, mapping failures to isError", async () => {
     setMcp(true, false);
     const ok = await mcpPost(
       request("/api/mcp", { body: rpc("tools/call", { name: "healthvault_uploads_recent", arguments: { limit: 1 } }) }),
     );
     const okBody = (await ok.json()) as { result: { content: { text: string }[] } };
+    expect(okBody.result.content[0].text).not.toContain("\n  ");
     expect(Array.isArray(JSON.parse(okBody.result.content[0].text))).toBe(true);
 
+    const ctxRes = await handleMcpRpc(
+      rpc("tools/call", { name: "healthvault_context", arguments: { sections: ["today", "profile"] } }),
+    );
+    const ctxResult = (ctxRes?.body as { result: { content: { text: string }[]; structuredContent?: Record<string, unknown> } }).result;
+    expect(ctxResult.content[0].text).not.toContain("\n  ");
+    expect(ctxResult.structuredContent).toBeDefined();
+    expect(ctxResult.structuredContent?.today).toBeDefined();
+    // Raw *Json columns are trimmed from agent profile output when parsed fields are returned.
+    const profileOut = ctxResult.structuredContent?.profile as Record<string, unknown>;
+    expect(profileOut.workScheduleJson).toBeUndefined();
+    expect(profileOut.goalJson).toBeUndefined();
+    expect(profileOut.wheyLinkJson).toBeUndefined();
+
     const unknown = await handleMcpRpc(rpc("tools/call", { name: "healthvault_nope" }));
-    expect((unknown?.body.result as { isError: boolean }).isError).toBe(true);
+    expect(((unknown?.body as Record<string, unknown>).result as { isError: boolean }).isError).toBe(true);
 
     const invalid = await handleMcpRpc(
       rpc("tools/call", { name: "healthvault_nutrition_day", arguments: { day: "not-a-day" } }),
     );
-    expect((invalid?.body.result as { isError: boolean }).isError).toBe(true);
+    expect(((invalid?.body as Record<string, unknown>).result as { isError: boolean }).isError).toBe(true);
+  });
+
+  test("JSON-RPC 2.0 batch requests and empty batches follow the spec", async () => {
+    setMcp(true, false);
+    const batchRes = await mcpPost(
+      request("/api/mcp", {
+        body: [
+          { jsonrpc: "2.0", id: 1, method: "ping" },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          { jsonrpc: "2.0", id: 2, method: "resources/list" },
+        ],
+      }),
+    );
+    expect(batchRes.status).toBe(200);
+    const batchBody = (await batchRes.json()) as { id: number; result: Record<string, unknown> }[];
+    expect(Array.isArray(batchBody)).toBe(true);
+    expect(batchBody).toHaveLength(2);
+    expect(batchBody[0]).toEqual({ jsonrpc: "2.0", id: 1, result: {} } as never);
+    expect(Array.isArray(batchBody[1].result.resources)).toBe(true);
+
+    const notifBatch = await mcpPost(
+      request("/api/mcp", { body: [{ jsonrpc: "2.0", method: "notifications/initialized" }] }),
+    );
+    expect(notifBatch.status).toBe(202);
+
+    const emptyBatch = await handleMcpRpc([]);
+    expect((emptyBatch?.body as { error: { code: number } }).error.code).toBe(-32600);
+  });
+
+  test("resources and prompts are exposed over Streamable HTTP MCP", async () => {
+    setMcp(true, false);
+    const resList = await handleMcpRpc(rpc("resources/list"));
+    const resources = ((resList?.body as { result: { resources: { uri: string }[] } }).result).resources;
+    expect(resources.map((r) => r.uri)).toEqual([
+      "healthvault://context",
+      "healthvault://profile",
+      "healthvault://nutrition/today",
+      "healthvault://training/block",
+    ]);
+
+    const resRead = await handleMcpRpc(rpc("resources/read", { uri: "healthvault://training/block" }));
+    const contents = ((resRead?.body as { result: { contents: { uri: string; text: string }[] } }).result).contents;
+    expect(contents[0].uri).toBe("healthvault://training/block");
+    expect(JSON.parse(contents[0].text)).toHaveProperty("active");
+
+    const promptsList = await handleMcpRpc(rpc("prompts/list"));
+    const prompts = ((promptsList?.body as { result: { prompts: { name: string }[] } }).result).prompts;
+    expect(prompts.map((p) => p.name)).toEqual(["daily_checkin", "weekly_training_review", "meal_audit"]);
+
+    const promptGet = await handleMcpRpc(rpc("prompts/get", { name: "meal_audit", arguments: { day: "2026-11-10" } }));
+    const messages = ((promptGet?.body as { result: { messages: { content: { text: string } }[] } }).result).messages;
+    expect(messages[0].content.text).toContain("2026-11-10");
+  });
+
+  test("Phase 4 parity tools (strength, training block, food_update, batch supplement_log, analytics) work end-to-end", async () => {
+    setMcp(true, false);
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const res = await handleMcpRpc(rpc("tools/call", { name, arguments: args }));
+      const result = (res?.body as { result: { content: { text: string }[]; isError?: boolean } }).result;
+      return { isError: Boolean(result.isError), data: result.isError ? result.content[0].text : JSON.parse(result.content[0].text) };
+    };
+
+    const strengthLogged = await call("healthvault_strength_log", {
+      day: "2026-11-10",
+      exercise: "Bench Press",
+      sets: [{ reps: 5, loadKg: 80 }],
+    });
+    expect(strengthLogged.isError).toBe(false);
+    const setId = strengthLogged.data.sets[0].id as number;
+    expect((await call("healthvault_strength_history", { days: 30 })).isError).toBe(false);
+    expect((await call("healthvault_strength_progression", { exercise: "Bench Press", weeks: 4 })).isError).toBe(false);
+    expect((await call("healthvault_strength_delete", { id: setId })).data).toEqual({ deleted: true });
+
+    expect((await call("healthvault_weekly_summary", { weekOffset: 0 })).isError).toBe(false);
+    expect((await call("healthvault_five_k_progress", { days: 365 })).isError).toBe(false);
+    expect((await call("healthvault_sleep_stages", { days: 30 })).isError).toBe(false);
+    expect((await call("healthvault_supplement_adherence", { weeks: 4 })).isError).toBe(false);
+
+    // Food update by id + offset search
+    const createdFood = await call("healthvault_food_add", {
+      name: "Phase4 Oats",
+      per100g: { kcal: 380, proteinG: 13, carbsG: 67, fatG: 7 },
+    });
+    expect(createdFood.isError).toBe(false);
+    const renamed = await call("healthvault_food_update", {
+      id: createdFood.data.id,
+      name: "Phase4 Rolled Oats",
+      brand: "Quaker",
+    });
+    expect(renamed.isError).toBe(false);
+    expect(renamed.data.name).toBe("Phase4 Rolled Oats");
+    expect(renamed.data.brand).toBe("Quaker");
+
+    // Batch supplement_log
+    const sup1 = await call("healthvault_supplement_create", { name: "Phase4 Vit D", dose: 2000, unit: "IU" });
+    const sup2 = await call("healthvault_supplement_create", { name: "Phase4 Zinc", dose: 15, unit: "mg" });
+    const batch = await call("healthvault_supplement_log", {
+      day: "2026-11-10",
+      entries: [
+        { supplementId: sup1.data.id, taken: true, takenAt: "2026-11-10T08:30:00" },
+        { supplementId: sup2.data.id, taken: true },
+      ],
+    });
+    expect(batch.isError).toBe(false);
+    expect(batch.data.count).toBe(2);
   });
 
   test("responses never disclose the bearer token", async () => {

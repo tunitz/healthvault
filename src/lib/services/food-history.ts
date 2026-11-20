@@ -434,9 +434,17 @@ export function previewHistoryRefresh(input: HistoryScopeInput): HistoryPreview 
     }
   }
 
+  const parentEntryIds = [...new Set(children.map((c) => c.foodLogId))];
+  const parentEntryCache = new Map<number, typeof foodLog.$inferSelect>();
+  if (parentEntryIds.length > 0) {
+    for (const parent of db.select().from(foodLog).where(inArray(foodLog.id, parentEntryIds)).all()) {
+      parentEntryCache.set(parent.id, parent);
+    }
+  }
+
   for (const child of children) {
     const previous = valuesOf(child);
-    const entry = db.select().from(foodLog).where(eq(foodLog.id, child.foodLogId)).get();
+    const entry = parentEntryCache.get(child.foodLogId);
     if (!entry) continue;
     const base = {
       kind: "ingredient" as const,
@@ -611,6 +619,21 @@ export function applyHistoryRefresh(
   const touchedEntries = new Set<number>();
 
   sqlite.transaction(() => {
+    const foodCache = new Map<number, typeof foods.$inferSelect | null>();
+    const loadFoodCached = (id: number) => {
+      if (!foodCache.has(id)) {
+        foodCache.set(id, db.select().from(foods).where(eq(foods.id, id)).get() ?? null);
+      }
+      return foodCache.get(id) ?? null;
+    };
+    const entryCache = new Map<number, typeof foodLog.$inferSelect | null>();
+    const loadEntryCached = (id: number) => {
+      if (!entryCache.has(id)) {
+        entryCache.set(id, db.select().from(foodLog).where(eq(foodLog.id, id)).get() ?? null);
+      }
+      return entryCache.get(id) ?? null;
+    };
+
     for (const change of changed) {
       if (change.proposed === null) continue;
       if (change.kind === "ingredient" && change.ingredientId !== null) {
@@ -620,7 +643,7 @@ export function applyHistoryRefresh(
           .where(eq(foodLogIngredients.id, change.ingredientId))
           .get();
         if (!row) continue;
-        const food = row.foodId === null ? null : db.select().from(foods).where(eq(foods.id, row.foodId)).get();
+        const food = row.foodId === null ? null : loadFoodCached(row.foodId);
         if (!food) continue;
         const next = {
           ...row,
@@ -636,9 +659,6 @@ export function applyHistoryRefresh(
           fatG: change.proposed.fatG,
           fibreG: change.proposed.fibreG,
           sodiumMg: change.proposed.sodiumMg,
-          source: food.source,
-          sourceUrl: food.sourceUrl,
-          sourceDate: food.sourceDate,
         };
         db.update(foodLogIngredients)
           .set({
@@ -654,9 +674,6 @@ export function applyHistoryRefresh(
             fatG: next.fatG,
             fibreG: next.fibreG,
             sodiumMg: next.sodiumMg,
-            source: next.source,
-            sourceUrl: next.sourceUrl,
-            sourceDate: next.sourceDate,
           })
           .where(eq(foodLogIngredients.id, row.id))
           .run();
@@ -673,9 +690,9 @@ export function applyHistoryRefresh(
         revisions += 1;
         touchedEntries.add(row.foodLogId);
       } else {
-        const entry = db.select().from(foodLog).where(eq(foodLog.id, change.entryId)).get();
+        const entry = loadEntryCached(change.entryId);
         if (!entry || entry.foodId === null) continue;
-        const food = db.select().from(foods).where(eq(foods.id, entry.foodId)).get();
+        const food = loadFoodCached(entry.foodId);
         if (!food) continue;
         const next = {
           ...entry,
@@ -701,6 +718,7 @@ export function applyHistoryRefresh(
           .where(eq(foodLog.id, entry.id))
           .returning()
           .get()!;
+        entryCache.set(entry.id, row);
         writeRevision({
           foodLogId: entry.id,
           reason: "food_history_refresh",

@@ -69,6 +69,16 @@ export function WeightChart({
   const firstYear = formatLocal(data[0].at, timezone).slice(0, 4);
   const lastYear = formatLocal(data[data.length - 1].at, timezone).slice(0, 4);
   const spansYears = firstYear !== lastYear;
+  const xFmt = new Intl.DateTimeFormat(
+    "en-US",
+    spansYears
+      ? { month: "short", year: "2-digit", timeZone: timezone }
+      : { month: "short", day: "numeric", timeZone: timezone },
+  );
+  const formatXTick = (value: number) => {
+    const formatted = xFmt.format(new Date(value));
+    return spansYears ? formatted.replace(" ", " '") : formatted;
+  };
   const changeKg = points[points.length - 1].value - points[0].value;
 
   return (
@@ -94,11 +104,7 @@ export function WeightChart({
               tickMargin={8}
               minTickGap={48}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-              tickFormatter={(value: number) =>
-                spansYears
-                  ? formatLocal(value, timezone).slice(2, 10)
-                  : formatLocal(value, timezone).slice(5, 10)
-              }
+              tickFormatter={formatXTick}
             />
             <YAxis
               width={40}
@@ -138,6 +144,7 @@ export function WeightChart({
               strokeWidth={2}
               dot={{ r: 3, fill: "var(--chart-1)" }}
               activeDot={{ r: 4 }}
+              isAnimationActive={false}
             />
             <Line
               dataKey="apple"
@@ -148,6 +155,7 @@ export function WeightChart({
               strokeWidth={2}
               dot={{ r: 3, fill: "var(--chart-2)" }}
               activeDot={{ r: 4 }}
+              isAnimationActive={false}
             />
           </LineChart>
         </ResponsiveContainer>

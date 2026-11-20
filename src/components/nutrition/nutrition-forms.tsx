@@ -9,6 +9,7 @@ import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { FoodForm } from "@/components/nutrition/food-forms";
 import { MealList } from "@/components/nutrition/meal-list";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { num } from "@/lib/format";
@@ -105,6 +106,8 @@ export function Diary({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<MealDraft>(() => ({ day, meal: defaultMeal, time: "", items: [] }));
   const [hydrated, setHydrated] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const scrollOnOpenRef = useRef(false);
   const storageKey = mealDraftStorageKey(day);
 
   const setMeal = (meal: Meal) => setDraft((current) => ({ ...current, meal }));
@@ -132,8 +135,19 @@ export function Diary({
     if (draft.day !== day) window.localStorage.removeItem(storageKey);
   }, [draft, hydrated, day, storageKey]);
 
+  useEffect(() => {
+    if (!open || !scrollOnOpenRef.current) return;
+    scrollOnOpenRef.current = false;
+    const panel = panelRef.current;
+    if (!panel) return;
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    const firstInput = panel.querySelector<HTMLElement>("input:not([type='hidden']), select, button");
+    (firstInput ?? panel).focus({ preventScroll: true });
+  }, [open]);
+
   const addToMeal = (meal: Meal) => {
     setMeal(meal);
+    scrollOnOpenRef.current = true;
     setOpen(true);
   };
 
@@ -159,7 +173,12 @@ export function Diary({
       </div>
 
       {open ? (
-        <div id="add-food-panel" className="rounded-xl border border-border p-3 sm:p-4">
+        <div
+          id="add-food-panel"
+          ref={panelRef}
+          tabIndex={-1}
+          className="scroll-mt-20 rounded-xl border border-border p-3 outline-none sm:p-4"
+        >
           <AddFoodPanel
             draft={draft}
             update={update}
@@ -218,6 +237,7 @@ function AddFoodPanel({
   const [saveItemErrors, setSaveItemErrors] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const submitGuard = useRef(false);
 
   // Saved-food search runs on the server over the whole library; only a small page of matches
@@ -557,7 +577,16 @@ function AddFoodPanel({
 
         {saveError ? <p role="alert" className="text-xs text-destructive">{saveError}</p> : null}
         <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={onDone} className="min-h-11">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (draft.items.length > 0) setConfirmDiscard(true);
+              else onDone();
+            }}
+            className="min-h-11"
+          >
             Discard
           </Button>
           <Button
@@ -572,6 +601,17 @@ function AddFoodPanel({
           </Button>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmDiscard}
+        onOpenChange={setConfirmDiscard}
+        title="Discard meal draft?"
+        description={`You have ${draft.items.length} unsaved ${draft.items.length === 1 ? "item" : "items"} in this meal draft. Discarding clears them permanently.`}
+        confirmLabel="Discard draft"
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          onDone();
+        }}
+      />
     </div>
   );
 }
@@ -792,6 +832,12 @@ function QuickEntry({ onAdd }: { onAdd: (item: MealDraftItem) => void }) {
             setName("");
             setQuantity("");
             setKcal("");
+            setProteinG("0");
+            setCarbsG("0");
+            setFatG("0");
+            setFibreG("0");
+            setSodiumMg("0");
+            setEstimated(true);
           }}
         >
           <Plus aria-hidden />
@@ -861,16 +907,64 @@ export function TargetsForm({ day, targets }: { day: string; targets: Targets })
 }
 
 export function CopyDayForm({ day, previousDay }: { day: string; previousDay: string }) {
+  const [fromDay, setFromDay] = useState(previousDay);
+  const [meal, setMeal] = useState("");
+  const [open, setOpen] = useState(false);
+
   return (
-    <ActionForm
-      action={copyDayAction}
-      className="flex w-full flex-col items-stretch gap-1 sm:inline-flex sm:w-auto sm:items-end"
-    >
-      <input type="hidden" name="fromDay" value={previousDay} />
-      <input type="hidden" name="toDay" value={day} />
-      <SubmitButton variant="outline" size="sm" className="w-full sm:w-auto">
-        Copy {previousDay.slice(5)}
-      </SubmitButton>
-    </ActionForm>
+    <div className="flex flex-col items-stretch gap-2 sm:items-end">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <ActionForm action={copyDayAction} className="inline-flex">
+          <input type="hidden" name="fromDay" value={previousDay} />
+          <input type="hidden" name="toDay" value={day} />
+          <SubmitButton variant="outline" size="sm">
+            Copy {previousDay.slice(5)}
+          </SubmitButton>
+        </ActionForm>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Close copy" : "Copy meal / date…"}
+        </Button>
+      </div>
+      {open ? (
+        <ActionForm
+          action={copyDayAction}
+          onSuccess={() => setOpen(false)}
+          className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card p-2.5"
+        >
+          <input type="hidden" name="toDay" value={day} />
+          <Field label="From date">
+            <Input
+              type="date"
+              name="fromDay"
+              value={fromDay}
+              onChange={(e) => setFromDay(e.target.value)}
+              className="h-8 w-36 max-sm:h-11"
+              required
+            />
+          </Field>
+          <Field label="Meal">
+            <select
+              name="meal"
+              value={meal}
+              onChange={(e) => setMeal(e.target.value)}
+              className={SELECT}
+            >
+              <option value="">All meals</option>
+              <option value="breakfast">Breakfast</option>
+              <option value="lunch">Lunch</option>
+              <option value="dinner">Dinner</option>
+              <option value="snack">Snack</option>
+            </select>
+          </Field>
+          <SubmitButton size="sm">Copy</SubmitButton>
+        </ActionForm>
+      ) : null}
+    </div>
   );
 }

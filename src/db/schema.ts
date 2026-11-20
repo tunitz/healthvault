@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const uploads = sqliteTable("uploads", {
@@ -5,6 +6,7 @@ export const uploads = sqliteTable("uploads", {
   filename: text("filename").notNull(),
   bytes: integer("bytes").notNull(),
   status: text("status").notNull(), // running | done | failed
+  rowsProcessed: integer("rows_processed").notNull().default(0),
   recordsInserted: integer("records_inserted").notNull().default(0),
   recordsDuplicates: integer("records_duplicates").notNull().default(0),
   message: text("message"),
@@ -30,6 +32,10 @@ export const records = sqliteTable(
     uniqueIndex("uq_records_key").on(t.typeIdentifier, t.startDate, t.endDate, t.sourceName, t.value),
     // metrics_series filters `WHERE type_identifier = ? AND start_ms >= ?` on a 1M+ row table.
     index("idx_records_type_start_ms").on(t.typeIdentifier, t.startMs),
+    // Accelerates dailySeriesSingleSource, sleepByDayStage, and activityFromRecords.
+    index("idx_records_type_day_source").on(t.typeIdentifier, t.day, t.sourceName),
+    // Eliminates 1M-row full scan for `SELECT MAX(day) FROM records`.
+    index("idx_records_day").on(t.day),
   ],
 );
 
@@ -56,7 +62,10 @@ export const workouts = sqliteTable(
     sourceName: text("source_name"),
     metadataJson: text("metadata_json"),
   },
-  (t) => [uniqueIndex("uq_workouts_key").on(t.workoutActivityType, t.startDate, t.endDate, t.sourceName)],
+  (t) => [
+    uniqueIndex("uq_workouts_key").on(t.workoutActivityType, t.startDate, t.endDate, t.sourceName),
+    index("idx_workouts_day_start_ms").on(t.day, t.startMs),
+  ],
 );
 
 /* ---------------------------------------------------------------------------------------------
@@ -165,7 +174,10 @@ export const foods = sqliteTable(
     createdAtMs: integer("created_at_ms").notNull(),
     updatedAtMs: integer("updated_at_ms").notNull(),
   },
-  (t) => [uniqueIndex("uq_foods_name_brand").on(t.name, t.brand)],
+  (t) => [
+    uniqueIndex("uq_foods_name_brand").on(t.name, t.brand),
+    uniqueIndex("uq_foods_name_null_brand").on(t.name).where(sql`${t.brand} IS NULL`),
+  ],
 );
 
 /** A composite dish. Totals are always computed from the ingredients, never stored. */
@@ -182,17 +194,24 @@ export const recipes = sqliteTable("recipes", {
 });
 
 /** One ingredient of a recipe. Grams are resolved (and the measure kept) at write time. */
-export const recipeIngredients = sqliteTable("recipe_ingredients", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  recipeId: integer("recipe_id")
-    .notNull()
-    .references(() => recipes.id),
-  foodId: integer("food_id").references(() => foods.id), // null = name-only ingredient
-  name: text("name"), // used when food_id is null, or as a display override
-  grams: real("grams").notNull(), // raw/as-stated ingredient weight
-  measureJson: text("measure_json"), // optional { name, count } the grams were resolved from
-  position: integer("position").notNull().default(0),
-});
+export const recipeIngredients = sqliteTable(
+  "recipe_ingredients",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipeId: integer("recipe_id")
+      .notNull()
+      .references(() => recipes.id),
+    foodId: integer("food_id").references(() => foods.id), // null = name-only ingredient
+    name: text("name"), // used when food_id is null, or as a display override
+    grams: real("grams").notNull(), // raw/as-stated ingredient weight
+    measureJson: text("measure_json"), // optional { name, count } the grams were resolved from
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [
+    index("idx_recipe_ingredients_recipe").on(t.recipeId),
+    index("idx_recipe_ingredients_food").on(t.foodId),
+  ],
+);
 
 /** Immutable per-entry snapshot of what was eaten. */
 export const foodLog = sqliteTable(
@@ -235,6 +254,8 @@ export const foodLog = sqliteTable(
   (t) => [
     uniqueIndex("uq_food_log_day_meal_at").on(t.day, t.meal, t.eatenAtMs, t.name),
     uniqueIndex("uq_food_log_whey_action_day").on(t.wheyActionDay),
+    index("idx_food_log_food").on(t.foodId),
+    index("idx_food_log_recipe").on(t.recipeId),
   ],
 );
 
@@ -292,6 +313,7 @@ export const foodLogIngredients = sqliteTable(
   (t) => [
     index("idx_food_log_ingredients_log").on(t.foodLogId),
     index("idx_food_log_ingredients_food").on(t.foodId),
+    index("idx_food_log_ingredients_recipe").on(t.recipeId),
   ],
 );
 
@@ -418,19 +440,23 @@ export const strengthSets = sqliteTable(
   ],
 );
 
-export const activitySummaries = sqliteTable("activity_summaries", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  dateComponents: text("date_components").notNull().unique(),
-  day: text("day").notNull(),
-  activeEnergyBurned: real("active_energy_burned"),
-  activeEnergyBurnedGoal: real("active_energy_burned_goal"),
-  appleMoveMinutes: real("apple_move_minutes"),
-  appleMoveMinutesGoal: real("apple_move_minutes_goal"),
-  appleExerciseTime: real("apple_exercise_time"),
-  appleExerciseTimeGoal: real("apple_exercise_time_goal"),
-  appleStandHours: real("apple_stand_hours"),
-  appleStandHoursGoal: real("apple_stand_hours_goal"),
-});
+export const activitySummaries = sqliteTable(
+  "activity_summaries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    dateComponents: text("date_components").notNull().unique(),
+    day: text("day").notNull(),
+    activeEnergyBurned: real("active_energy_burned"),
+    activeEnergyBurnedGoal: real("active_energy_burned_goal"),
+    appleMoveMinutes: real("apple_move_minutes"),
+    appleMoveMinutesGoal: real("apple_move_minutes_goal"),
+    appleExerciseTime: real("apple_exercise_time"),
+    appleExerciseTimeGoal: real("apple_exercise_time_goal"),
+    appleStandHours: real("apple_stand_hours"),
+    appleStandHoursGoal: real("apple_stand_hours_goal"),
+  },
+  (t) => [index("idx_activity_summaries_day").on(t.day)],
+);
 
 /* ---------------------------------------------------------------------------------------------
  * Stage 3: versioned, cross-device preferences + UI-first single-user credentials.
@@ -459,3 +485,53 @@ export const authCredentials = sqliteTable("auth_credentials", {
   createdAtMs: integer("created_at_ms").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
 });
+
+/** Parsed GPX workout routes from `workout-routes/*.gpx` inside Apple Health exports. */
+export const workoutRoutes = sqliteTable(
+  "workout_routes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workoutId: integer("workout_id").references(() => workouts.id),
+    filename: text("filename").notNull(),
+    day: text("day").notNull(),
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    pointCount: integer("point_count").notNull().default(0),
+    distanceKm: real("distance_km").notNull().default(0),
+    elevationGainM: real("elevation_gain_m").notNull().default(0),
+    elevationLossM: real("elevation_loss_m").notNull().default(0),
+    polylineJson: text("polyline_json").notNull(), // [lat, lon, ele?][]
+    splitsJson: text("splits_json").notNull(), // { km, paceMinPerKm, eleDeltaM }[]
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_workout_routes_filename").on(t.filename),
+    index("idx_workout_routes_workout").on(t.workoutId),
+    index("idx_workout_routes_day").on(t.day),
+  ],
+);
+
+/** Parsed Apple Watch ECG recordings from `electrocardiograms/ecg_*.csv`. */
+export const ecgRecordings = sqliteTable(
+  "ecg_recordings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    filename: text("filename").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+    recordedAtMs: integer("recorded_at_ms").notNull(),
+    day: text("day").notNull(),
+    classification: text("classification").notNull(),
+    avgHr: real("avg_hr"),
+    samplingHz: real("sampling_hz").notNull().default(512),
+    unit: text("unit").notNull().default("µV"),
+    sampleCount: integer("sample_count").notNull().default(0),
+    samplesJson: text("samples_json").notNull(), // downsampled µV waveform array
+    symptoms: text("symptoms"),
+    device: text("device"),
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_ecg_recordings_filename").on(t.filename),
+    index("idx_ecg_recordings_day").on(t.day),
+  ],
+);

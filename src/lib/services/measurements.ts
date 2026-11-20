@@ -3,7 +3,7 @@ import { db, sqlite } from "@/db";
 import { measurements } from "@/db/schema";
 import { addDays, formatLocal, localDay, localDayStartMs, localTimeMs } from "@/lib/day";
 import { getTimezone } from "@/lib/services/profile";
-import { dayField, enumField, fail, idField, numField, str } from "@/lib/validate";
+import { dayField, enumField, fail, idField, instantField, numField, str } from "@/lib/validate";
 
 export type MeasurementKind = "weight" | "bodyFat" | "waist";
 export const KINDS = ["weight", "bodyFat", "waist"] as const;
@@ -57,13 +57,7 @@ export function addMeasurement(input: Record<string, unknown>): MeasurementRow {
     input.day === undefined || input.day === null || input.day === "" ? null : dayField(input.day, "day");
   let takenAtMs: number;
   if (input.takenAt !== undefined && input.takenAt !== null && input.takenAt !== "") {
-    if (typeof input.takenAt === "number") {
-      takenAtMs = numField(input.takenAt, "takenAt", { min: 0, max: Date.now() + 86_400_000 })!;
-    } else if (typeof input.takenAt === "string" && !Number.isNaN(Date.parse(input.takenAt))) {
-      takenAtMs = Date.parse(input.takenAt);
-    } else {
-      fail("takenAt must be an ISO timestamp or epoch ms");
-    }
+    takenAtMs = instantField(input.takenAt, "takenAt", tz);
     if (takenAtMs < 0 || takenAtMs > Date.now() + 86_400_000) fail("takenAt is outside the accepted range");
   } else if (explicitDay) {
     takenAtMs = localTimeMs(explicitDay, "12:00", tz);
@@ -113,6 +107,20 @@ export function manualMeasurements(kind: MeasurementKind = "weight", limit = 100
 
 type AppleRow = { startMs: number; startDate: string; value: number; unit: string };
 
+function appleWeightToKg(value: number, unit: string): number {
+  switch (unit.trim().toLowerCase()) {
+    case "lb":
+    case "lbs":
+      return value * 0.45359237;
+    case "g":
+      return value / 1000;
+    case "st":
+      return value * 6.35029318;
+    default:
+      return value;
+  }
+}
+
 /** Apple BodyMass is read from the imported records; it is never copied into `measurements`. */
 function appleWeight(days: number, tz: string): Point[] {
   const endDay = localDay(Date.now(), tz);
@@ -126,19 +134,15 @@ function appleWeight(days: number, tz: string): Point[] {
        ORDER BY start_ms`,
     )
     .all(startMs) as AppleRow[];
-  return rows.map((r) => {
-    const u = r.unit.toLowerCase();
-    const kg = u === "lb" || u === "lbs" ? r.value * 0.45359237 : r.value;
-    return {
-      id: null,
-      day: r.startDate.slice(0, 10),
-      takenAtMs: r.startMs,
-      value: kg,
-      unit: "kg" as const,
-      source: "apple" as const,
-      note: null,
-    };
-  });
+  return rows.map((r) => ({
+    id: null,
+    day: r.startDate.slice(0, 10),
+    takenAtMs: r.startMs,
+    value: appleWeightToKg(r.value, r.unit),
+    unit: "kg" as const,
+    source: "apple" as const,
+    note: null,
+  }));
 }
 
 /** One chronological series: manual entries merged with Apple BodyMass. */
@@ -169,8 +173,49 @@ export function dailySeries(kind: MeasurementKind = "weight", days = 90): Point[
 }
 
 export function latestMeasurement(kind: MeasurementKind = "weight"): Point | null {
-  const history = measurementHistory(kind, 3650);
-  return history.length ? history[history.length - 1] : null;
+  const manualRow = db
+    .select()
+    .from(measurements)
+    .where(eq(measurements.kind, kind))
+    .orderBy(desc(measurements.takenAtMs))
+    .limit(1)
+    .get();
+  const manualPoint: Point | null = manualRow
+    ? {
+        id: manualRow.id,
+        day: manualRow.day,
+        takenAtMs: manualRow.takenAtMs,
+        value: manualRow.value,
+        unit: KIND_UNIT[kind],
+        source: "manual",
+        note: manualRow.note,
+      }
+    : null;
+
+  if (kind !== "weight") return manualPoint;
+
+  const appleRow = sqlite
+    .prepare(
+      `SELECT start_ms AS startMs, start_date AS startDate, value, unit
+       FROM records
+       WHERE type_identifier = 'HKQuantityTypeIdentifierBodyMass'
+       ORDER BY start_ms DESC LIMIT 1`,
+    )
+    .get() as AppleRow | undefined;
+  if (!appleRow) return manualPoint;
+
+  const applePoint: Point = {
+    id: null,
+    day: appleRow.startDate.slice(0, 10),
+    takenAtMs: appleRow.startMs,
+    value: appleWeightToKg(appleRow.value, appleRow.unit),
+    unit: "kg",
+    source: "apple",
+    note: null,
+  };
+
+  if (!manualPoint) return applePoint;
+  return manualPoint.takenAtMs >= applePoint.takenAtMs ? manualPoint : applePoint;
 }
 
 export function weightTrend(days = 7): { points: Point[]; changeKg: number | null; avgKg: number | null } {

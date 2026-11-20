@@ -1,6 +1,17 @@
+import type { Statement } from "better-sqlite3";
 import { addDays, localDay } from "@/lib/day";
 import { getTimezone } from "@/lib/services/profile";
 import { sqlite } from "@/db";
+
+const stmtCache = new Map<string, Statement>();
+function stmt(sql: string): Statement {
+  let compiled = stmtCache.get(sql);
+  if (!compiled) {
+    compiled = sqlite.prepare(sql);
+    stmtCache.set(sql, compiled);
+  }
+  return compiled;
+}
 
 /** The local day `days - 1` before today, so a "last N days" window is exactly N days
  * inclusive of today (the old `-days` bound made every window one day too long). */
@@ -14,12 +25,38 @@ export type TypeStat = {
   firstDay: string; lastDay: string; sum: number; avg: number; max: number;
 };
 
+let typeStatsCache: { version: string; rows: TypeStat[] } | null = null;
+let allTimeStepsCache: { version: string; total: number } | null = null;
+let recordsMutationSeq = 0;
+
+/** Call after in-process bulk record writes so cached rollups invalidate immediately. */
+export function invalidateRecordCaches(): void {
+  recordsMutationSeq += 1;
+  typeStatsCache = null;
+  allTimeStepsCache = null;
+}
+
+function recordsVersion(): string {
+  // O(1) B-tree seek + SQLite cross-connection data_version pragma (avoids 1M-row COUNT(*) scan).
+  const dataVer = sqlite.pragma("data_version", { simple: true });
+  // Separate scalar subqueries let SQLite use O(1) B-tree seeks for both MIN and MAX
+  // (combining MIN(id) and MAX(id) in one SELECT forces a full index scan).
+  const row = stmt(
+    "SELECT COALESCE((SELECT MAX(id) FROM records), 0) AS m, COALESCE((SELECT MIN(id) FROM records), 0) AS n",
+  ).get() as { m: number; n: number };
+  return `${dataVer}:${recordsMutationSeq}:${row.n}:${row.m}`;
+}
+
 export function typeStats(): TypeStat[] {
-  return sqlite.prepare(`
+  const version = recordsVersion();
+  if (typeStatsCache && typeStatsCache.version === version) return typeStatsCache.rows;
+  const rows = stmt(`
     SELECT type_identifier AS typeIdentifier, unit, COUNT(*) AS count,
            MIN(day) AS firstDay, MAX(day) AS lastDay,
            SUM(value) AS sum, AVG(value) AS avg, MAX(value) AS max
     FROM records GROUP BY type_identifier ORDER BY count DESC`).all() as TypeStat[];
+  typeStatsCache = { version, rows };
+  return rows;
 }
 
 /* `dailyTotals`/`dailyAverages` were removed: summing a quantity across devices double counts
@@ -30,37 +67,166 @@ export function typeStats(): TypeStat[] {
  * InBed (1) is a superset of the asleep stages, so it is excluded everywhere it would be
  * added to a total: summing it with the asleep rows double-counts the night. */
 const NIGHT = `CASE WHEN CAST(substr(start_date, 12, 2) AS INTEGER) < 12 THEN date(day, '-1 day') ELSE day END`;
-const ASLEEP = "(value IN (2, 4, 5, 6))"; // Asleep*, Core, Deep, REM — InBed(1)/Awake(3) excluded
+const ASLEEP_STAGES = new Set([2, 4, 5, 6]);
 
-/** Newest `nights` nights, each with one row per stage. The LIMIT is on nights, not on
- * (night, stage) rows — the old query showed ~25 nights when 90 were asked for.
- *
- * The computed column is deliberately called `night`, not `day`: when an alias collides with
- * a real column, SQLite resolves GROUP BY/ORDER BY to the column, which split every
- * midnight-crossing night by calendar day. */
+type SleepSegmentRow = { night: string; source: string; stage: number; startMs: number; endMs: number };
+
+function mergedDurationMs(intervals: [number, number][]): number {
+  if (intervals.length === 0) return 0;
+  intervals.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let total = 0;
+  let curStart = intervals[0][0];
+  let curEnd = intervals[0][1];
+  for (let i = 1; i < intervals.length; i += 1) {
+    const [s, e] = intervals[i];
+    if (s <= curEnd) {
+      if (e > curEnd) curEnd = e;
+    } else {
+      total += Math.max(0, curEnd - curStart);
+      curStart = s;
+      curEnd = e;
+    }
+  }
+  total += Math.max(0, curEnd - curStart);
+  return total;
+}
+
+/**
+ * Deduplicate multi-source sleep records per night: pick one primary source per night
+ * (preferring a stage-capable Watch source with Core/Deep/REM, then greatest asleep duration),
+ * and merge overlapping `[startMs, endMs]` intervals per stage so overlapping samples never
+ * double-count.
+ */
+function aggregateSleepNights(
+  rows: SleepSegmentRow[],
+): { day: string; stage: number; hours: number; source: string }[] {
+  const byNight = new Map<string, Map<string, Map<number, [number, number][]>>>();
+  for (const r of rows) {
+    if (r.endMs <= r.startMs) continue;
+    let sources = byNight.get(r.night);
+    if (!sources) {
+      sources = new Map();
+      byNight.set(r.night, sources);
+    }
+    let stages = sources.get(r.source);
+    if (!stages) {
+      stages = new Map();
+      sources.set(r.source, stages);
+    }
+    let list = stages.get(r.stage);
+    if (!list) {
+      list = [];
+      stages.set(r.stage, list);
+    }
+    list.push([r.startMs, r.endMs]);
+  }
+
+  const out: { day: string; stage: number; hours: number; source: string }[] = [];
+  const nights = [...byNight.keys()].sort();
+  for (const night of nights) {
+    const sources = byNight.get(night)!;
+    let bestSource: string | null = null;
+    let bestHasStages = false;
+    let bestAsleepMs = -1;
+    let bestStageMs: Map<number, number> | null = null;
+
+    for (const [source, stages] of sources) {
+      const hasStages = stages.has(4) || stages.has(5) || stages.has(6);
+      const stageMs = new Map<number, number>();
+      let asleepMs = 0;
+      for (const [stage, intervals] of stages) {
+        const ms = mergedDurationMs(intervals);
+        stageMs.set(stage, ms);
+        if (ASLEEP_STAGES.has(stage)) asleepMs += ms;
+      }
+      if (
+        bestSource === null ||
+        (hasStages && !bestHasStages) ||
+        (hasStages === bestHasStages && asleepMs > bestAsleepMs) ||
+        (hasStages === bestHasStages && asleepMs === bestAsleepMs && source < bestSource)
+      ) {
+        bestSource = source;
+        bestHasStages = hasStages;
+        bestAsleepMs = asleepMs;
+        bestStageMs = stageMs;
+      }
+    }
+
+    if (bestSource !== null && bestStageMs) {
+      for (const [stage, ms] of bestStageMs) {
+        if (ms > 0) out.push({ day: night, stage, hours: ms / 3_600_000, source: bestSource });
+      }
+    }
+  }
+  return out;
+}
+
+/** Newest `nights` nights, each with one row per stage, single-source and interval-deduped. */
 export function sleepByDayStage(nights = 90) {
   const capped = Number.isFinite(nights) && nights >= 1 ? Math.trunc(nights) : 90;
-  return (sqlite.prepare(`
-    WITH recent AS (
-      SELECT ${NIGHT} AS night FROM records
-      WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
-      GROUP BY night ORDER BY night DESC LIMIT ?
-    ), staged AS (
-      SELECT ${NIGHT} AS night, value AS stage, SUM((end_ms - start_ms) / 3600000.0) AS hours
-      FROM records
-      WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
-      GROUP BY night, value
-    )
-    SELECT staged.night AS day, staged.stage, staged.hours
-    FROM staged JOIN recent ON recent.night = staged.night
-    ORDER BY staged.night`)
-    .all(capped) as { day: string; stage: number; hours: number }[]);
+  const recentNights = stmt(`
+    SELECT DISTINCT ${NIGHT} AS night FROM records
+    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND value IN (2, 3, 4, 5, 6)
+    ORDER BY night DESC LIMIT ?`).all(capped) as { night: string }[];
+  if (recentNights.length === 0) return [];
+  const minNight = recentNights[recentNights.length - 1].night;
+  const keep = new Set(recentNights.map((r) => r.night));
+  const raw = stmt(`
+    SELECT ${NIGHT} AS night, source_name AS source, value AS stage,
+           start_ms AS startMs, end_ms AS endMs
+    FROM records
+    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis'
+      AND value IN (2, 3, 4, 5, 6)
+      AND day >= ?`).all(minNight) as SleepSegmentRow[];
+  return aggregateSleepNights(raw.filter((r) => keep.has(r.night))).map(({ day, stage, hours }) => ({
+    day,
+    stage,
+    hours,
+  }));
+}
+
+/** Single-source, interval-deduped asleep hours per night for `[startDay, endDay]` (inclusive). */
+export function sleepDailyHours(startDay: string, endDay?: string): { day: string; value: number; source: string }[] {
+  const upperDay = endDay ? addDays(endDay, 1) : null;
+  const raw = (upperDay
+    ? stmt(`
+        SELECT ${NIGHT} AS night, source_name AS source, value AS stage,
+               start_ms AS startMs, end_ms AS endMs
+        FROM records
+        WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis'
+          AND value IN (2, 4, 5, 6)
+          AND day >= ? AND day <= ?`).all(startDay, upperDay)
+    : stmt(`
+        SELECT ${NIGHT} AS night, source_name AS source, value AS stage,
+               start_ms AS startMs, end_ms AS endMs
+        FROM records
+        WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis'
+          AND value IN (2, 4, 5, 6)
+          AND day >= ?`).all(startDay)) as SleepSegmentRow[];
+  const filtered = raw.filter((r) => r.night >= startDay && (!endDay || r.night <= endDay));
+  const staged = aggregateSleepNights(filtered);
+  const byNight = new Map<string, { day: string; value: number; source: string }>();
+  for (const row of staged) {
+    if (!ASLEEP_STAGES.has(row.stage)) continue;
+    const prev = byNight.get(row.day);
+    if (prev) prev.value += row.hours;
+    else byNight.set(row.day, { day: row.day, value: row.hours, source: row.source });
+  }
+  return [...byNight.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 export type ActivitySeriesPoint = {
   day: string; activeEnergy: number | null; activeEnergyGoal: number | null;
   moveMinutes: number | null; exerciseTime: number | null; standHours: number | null;
 };
+
+/** Normalise Apple energy record units to kcal ("Cal" = kcal, lowercase "cal" = kcal/1000, "kJ" = *0.2390057). */
+const RECORD_ENERGY_KCAL = `CASE
+  WHEN trim(unit) = 'Cal' OR lower(trim(unit)) = 'kcal' THEN value
+  WHEN lower(trim(unit)) = 'kj' THEN value * 0.2390057
+  WHEN lower(trim(unit)) = 'cal' THEN value / 1000.0
+  ELSE value
+END`;
 
 /**
  * Recent Apple exports contain the rings as ordinary quantity records but no ActivitySummary
@@ -70,7 +236,12 @@ export type ActivitySeriesPoint = {
  * so inventing a value there would misrepresent the data.
  */
 function activityFromRecords(days: number): ActivitySeriesPoint[] {
-  const energy = dailySeriesSingleSource("HKQuantityTypeIdentifierActiveEnergyBurned", days, "sum");
+  const energy = dailySeriesSingleSource(
+    "HKQuantityTypeIdentifierActiveEnergyBurned",
+    days,
+    "sum",
+    RECORD_ENERGY_KCAL,
+  );
   const exercise = dailySeriesSingleSource("HKQuantityTypeIdentifierAppleExerciseTime", days, "sum");
   const byDay = new Map<string, ActivitySeriesPoint>();
   for (const point of energy) {
@@ -88,6 +259,30 @@ function activityFromRecords(days: number): ActivitySeriesPoint[] {
     byDay.set(point.day, row);
   }
   return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/** Active energy per day in `[startDay, endDay]`, falling back to quantity records when ActivitySummary is absent. */
+export function activeEnergyBetween(startDay: string, endDay: string): { day: string; value: number; source?: string }[] {
+  const summaryRows = sqlite.prepare(`
+    SELECT day, SUM(active_energy_burned) AS value
+    FROM activity_summaries
+    WHERE day >= ? AND day <= ?
+    GROUP BY day ORDER BY day`).all(startDay, endDay) as { day: string; value: number | null }[];
+  const validSummary = summaryRows.filter((r): r is { day: string; value: number } => r.value !== null);
+  if (validSummary.length > 0) return validSummary;
+  return sqlite.prepare(`
+    WITH perSource AS (
+      SELECT day, source_name AS source, SUM(${RECORD_ENERGY_KCAL}) AS value, COUNT(*) AS samples
+      FROM records
+      WHERE type_identifier = 'HKQuantityTypeIdentifierActiveEnergyBurned'
+        AND day >= ? AND day <= ?
+      GROUP BY day, source_name
+    ), ranked AS (
+      SELECT day, source, value,
+             ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, value DESC) AS rk
+      FROM perSource
+    )
+    SELECT day, source, value FROM ranked WHERE rk = 1 ORDER BY day`).all(startDay, endDay) as DailyPoint[];
 }
 
 export function activitySummarySeries(limit = 180): ActivitySeriesPoint[] {
@@ -159,28 +354,247 @@ export const WORKOUT_DEDUP = `
     WHERE rn = 1
   )`;
 
+export type WorkoutFilters = {
+  type?: string;
+  fromDay?: string;
+  toDay?: string;
+  source?: string;
+  query?: string;
+};
+
+function buildWorkoutWhere(filters: WorkoutFilters = {}): { sql: string; args: unknown[] } {
+  const clauses: string[] = [];
+  const args: unknown[] = [];
+  if (filters.type) {
+    clauses.push("workout_activity_type = ?");
+    args.push(filters.type);
+  }
+  if (filters.fromDay) {
+    clauses.push("day >= ?");
+    args.push(filters.fromDay);
+  }
+  if (filters.toDay) {
+    clauses.push("day <= ?");
+    args.push(filters.toDay);
+  }
+  if (filters.source) {
+    clauses.push("source_name = ?");
+    args.push(filters.source);
+  }
+  if (filters.query) {
+    const q = `%${filters.query.trim().toLowerCase()}%`;
+    clauses.push("(LOWER(workout_activity_type) LIKE ? OR LOWER(COALESCE(source_name, '')) LIKE ? OR day LIKE ?)");
+    args.push(q, q, q);
+  }
+  return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", args };
+}
+
 /** One page of the deduped workout list, newest first. The page size is capped at 500. */
-export function allWorkouts({ limit = 500, offset = 0 }: { limit?: number; offset?: number } = {}) {
+export function allWorkouts({
+  limit = 500,
+  offset = 0,
+  ...filters
+}: { limit?: number; offset?: number } & WorkoutFilters = {}) {
   const take = Number.isFinite(limit) ? Math.min(Math.max(1, Math.trunc(limit)), 500) : 500;
   const skip = Number.isFinite(offset) && offset > 0 ? Math.trunc(offset) : 0;
+  const where = buildWorkoutWhere(filters);
   return sqlite.prepare(`
     WITH ${WORKOUT_DEDUP}
-    SELECT workout_activity_type AS type, day, start_date AS startDate, end_date AS endDate,
+    SELECT deduped.id, workout_activity_type AS type, deduped.day, start_date AS startDate, end_date AS endDate,
            duration_seconds AS durationSeconds, total_distance AS totalDistance,
            total_distance_unit AS totalDistanceUnit, ${WORKOUT_DISTANCE_KM} AS distanceKm,
            total_energy_burned AS totalEnergyBurned,
            total_energy_burned_unit AS totalEnergyBurnedUnit, avg_hr AS avgHr, min_hr AS minHr,
            max_hr AS maxHr, source_name AS sourceName, metadata_json AS metadataJson,
            CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
-                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm
-    FROM deduped ORDER BY start_ms DESC LIMIT ? OFFSET ?`).all(take, skip) as {
-      type: string; day: string; startDate: string; endDate: string;
+                THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm,
+           EXISTS(SELECT 1 FROM workout_routes r WHERE r.workout_id = deduped.id) AS hasRoute
+    FROM deduped
+    ${where.sql}
+    ORDER BY start_ms DESC LIMIT ? OFFSET ?`).all(...where.args, take, skip) as {
+      id: number; type: string; day: string; startDate: string; endDate: string;
       durationSeconds: number | null; totalDistance: number | null; totalDistanceUnit: string | null;
       distanceKm: number | null;
       totalEnergyBurned: number | null; totalEnergyBurnedUnit: string | null;
       avgHr: number | null; minHr: number | null; maxHr: number | null; paceMinPerKm: number | null;
-      sourceName: string | null; metadataJson: string | null;
+      sourceName: string | null; metadataJson: string | null; hasRoute: number;
     }[];
+}
+
+export function countWorkouts(filters: WorkoutFilters = {}): number {
+  const where = buildWorkoutWhere(filters);
+  const row = sqlite
+    .prepare(`WITH ${WORKOUT_DEDUP} SELECT COUNT(*) AS c FROM deduped ${where.sql}`)
+    .get(...where.args) as { c: number };
+  return row.c;
+}
+
+export function workoutFilterOptions(): { types: string[]; sources: string[] } {
+  const types = (
+    sqlite
+      .prepare(`WITH ${WORKOUT_DEDUP} SELECT DISTINCT workout_activity_type AS v FROM deduped ORDER BY v`)
+      .all() as { v: string }[]
+  ).map((r) => r.v);
+  const sources = (
+    sqlite
+      .prepare(`WITH ${WORKOUT_DEDUP} SELECT DISTINCT source_name AS v FROM deduped WHERE source_name IS NOT NULL AND source_name != '' ORDER BY v`)
+      .all() as { v: string }[]
+  ).map((r) => r.v);
+  return { types, sources };
+}
+
+export type WorkoutRouteRow = {
+  id: number;
+  workoutId: number | null;
+  filename: string;
+  day: string;
+  startMs: number;
+  endMs: number;
+  pointCount: number;
+  distanceKm: number;
+  elevationGainM: number;
+  elevationLossM: number;
+  polyline: [number, number, number?][];
+  splits: { km: number; paceMinPerKm: number; eleDeltaM: number }[];
+};
+
+export function workoutDetail(id: number) {
+  const workout = sqlite
+    .prepare(`
+      SELECT id, workout_activity_type AS type, day, start_date AS startDate, end_date AS endDate,
+             start_ms AS startMs, end_ms AS endMs,
+             duration_seconds AS durationSeconds, total_distance AS totalDistance,
+             total_distance_unit AS totalDistanceUnit, ${WORKOUT_DISTANCE_KM} AS distanceKm,
+             total_energy_burned AS totalEnergyBurned,
+             total_energy_burned_unit AS totalEnergyBurnedUnit, avg_hr AS avgHr, min_hr AS minHr,
+             max_hr AS maxHr, source_name AS sourceName, metadata_json AS metadataJson,
+             CASE WHEN ${WORKOUT_DISTANCE_KM} > 0 AND duration_seconds > 0
+                  THEN (duration_seconds / 60.0) / (${WORKOUT_DISTANCE_KM}) END AS paceMinPerKm
+      FROM workouts WHERE id = ?`)
+    .get(id) as
+    | {
+        id: number; type: string; day: string; startDate: string; endDate: string;
+        startMs: number; endMs: number;
+        durationSeconds: number | null; totalDistance: number | null; totalDistanceUnit: string | null;
+        distanceKm: number | null; totalEnergyBurned: number | null; totalEnergyBurnedUnit: string | null;
+        avgHr: number | null; minHr: number | null; maxHr: number | null; paceMinPerKm: number | null;
+        sourceName: string | null; metadataJson: string | null;
+      }
+    | undefined;
+  if (!workout) return null;
+
+  const rawRoute = sqlite
+    .prepare(`
+      SELECT id, workout_id AS workoutId, filename, day, start_ms AS startMs, end_ms AS endMs,
+             point_count AS pointCount, distance_km AS distanceKm,
+             elevation_gain_m AS elevationGainM, elevation_loss_m AS elevationLossM,
+             polyline_json AS polylineJson, splits_json AS splitsJson
+      FROM workout_routes
+      WHERE workout_id = ? OR (day = ? AND start_ms <= ? AND end_ms >= ?)
+      ORDER BY (workout_id = ?) DESC, ABS(start_ms - ?) ASC
+      LIMIT 1`)
+    .get(id, workout.day, workout.endMs + 600_000, workout.startMs - 600_000, id, workout.startMs) as
+    | (Omit<WorkoutRouteRow, "polyline" | "splits"> & { polylineJson: string; splitsJson: string })
+    | undefined;
+
+  let route: WorkoutRouteRow | null = null;
+  if (rawRoute) {
+    try {
+      route = {
+        id: rawRoute.id,
+        workoutId: rawRoute.workoutId,
+        filename: rawRoute.filename,
+        day: rawRoute.day,
+        startMs: rawRoute.startMs,
+        endMs: rawRoute.endMs,
+        pointCount: rawRoute.pointCount,
+        distanceKm: rawRoute.distanceKm,
+        elevationGainM: rawRoute.elevationGainM,
+        elevationLossM: rawRoute.elevationLossM,
+        polyline: JSON.parse(rawRoute.polylineJson) as [number, number, number?][],
+        splits: JSON.parse(rawRoute.splitsJson) as { km: number; paceMinPerKm: number; eleDeltaM: number }[],
+      };
+    } catch {
+      route = null;
+    }
+  }
+
+  const strengthSets = sqlite
+    .prepare(`
+      SELECT id, day, exercise, set_no AS setNo, reps, load_kg AS loadKg, note
+      FROM strength_sets
+      WHERE workout_id = ?
+      ORDER BY exercise, set_no`)
+    .all(id) as {
+      id: number; day: string; exercise: string; setNo: number;
+      reps: number | null; loadKg: number | null; note: string | null;
+    }[];
+
+  const plannedSession = sqlite
+    .prepare(`
+      SELECT id, day, kind, intent, title, status, week_no AS weekNo, block_start AS blockStart
+      FROM planned_sessions
+      WHERE workout_id = ?
+      LIMIT 1`)
+    .get(id) as
+    | {
+        id: number; day: string; kind: string; intent: string | null;
+        title: string; status: string; weekNo: number | null; blockStart: string | null;
+      }
+    | undefined;
+
+  return { workout, route, strengthSets, plannedSession: plannedSession ?? null };
+}
+
+export type EcgRecordingRow = {
+  id: number;
+  filename: string;
+  recordedAt: string;
+  recordedAtMs: number;
+  day: string;
+  classification: string;
+  avgHr: number | null;
+  samplingHz: number;
+  unit: string;
+  sampleCount: number;
+  samples: number[];
+  symptoms: string | null;
+  device: string | null;
+};
+
+export function listEcgRecordings(): EcgRecordingRow[] {
+  const rows = sqlite
+    .prepare(`
+      SELECT id, filename, recorded_at AS recordedAt, recorded_at_ms AS recordedAtMs,
+             day, classification, avg_hr AS avgHr, sampling_hz AS samplingHz,
+             unit, sample_count AS sampleCount, samples_json AS samplesJson,
+             symptoms, device
+      FROM ecg_recordings
+      ORDER BY recorded_at_ms DESC`)
+    .all() as (Omit<EcgRecordingRow, "samples"> & { samplesJson: string })[];
+  return rows.map((row) => {
+    let samples: number[] = [];
+    try {
+      samples = JSON.parse(row.samplesJson) as number[];
+    } catch {
+      samples = [];
+    }
+    return {
+      id: row.id,
+      filename: row.filename,
+      recordedAt: row.recordedAt,
+      recordedAtMs: row.recordedAtMs,
+      day: row.day,
+      classification: row.classification,
+      avgHr: row.avgHr,
+      samplingHz: row.samplingHz,
+      unit: row.unit,
+      sampleCount: row.sampleCount,
+      samples,
+      symptoms: row.symptoms,
+      device: row.device,
+    };
+  });
 }
 
 /** Newest local day with a deduped workout session; null when the table is empty. */
@@ -191,13 +605,90 @@ export function lastWorkoutDay(): string | null {
   return row.day;
 }
 
-export function recordsForType(typeIdentifier: string, limit = 200) {
+export type RecordFilters = {
+  fromDay?: string;
+  toDay?: string;
+  source?: string;
+};
+
+export function recordsForType(typeIdentifier: string, limit = 200, filters: RecordFilters = {}) {
+  const clauses = ["type_identifier = ?"];
+  const args: unknown[] = [typeIdentifier];
+  if (filters.fromDay) {
+    clauses.push("day >= ?");
+    args.push(filters.fromDay);
+  }
+  if (filters.toDay) {
+    clauses.push("day <= ?");
+    args.push(filters.toDay);
+  }
+  if (filters.source) {
+    clauses.push("source_name = ?");
+    args.push(filters.source);
+  }
+  const capped = Number.isFinite(limit) ? Math.min(Math.max(1, Math.trunc(limit)), 2000) : 200;
   return sqlite.prepare(`
     SELECT day, start_date AS startDate, end_date AS endDate, value, unit, source_name AS sourceName
-    FROM records WHERE type_identifier = ? ORDER BY start_ms DESC LIMIT ?`)
-    .all(typeIdentifier, limit) as {
+    FROM records WHERE ${clauses.join(" AND ")} ORDER BY start_ms DESC LIMIT ?`)
+    .all(...args, capped) as {
       day: string; startDate: string; endDate: string; value: number; unit: string; sourceName: string;
     }[];
+}
+
+const CUMULATIVE_HINT = /(Count|Distance|EnergyBurned|Time|FlightsClimbed|Dietary|Water|Minutes)/i;
+
+/** Single-source-per-day trend series for any numeric Apple Health record type in Explorer. */
+export function explorerDailyTrend(
+  typeIdentifier: string,
+  filters: RecordFilters = {},
+  maxDays = 180,
+): { day: string; value: number; source: string }[] {
+  if (typeIdentifier.startsWith("HKCategoryTypeIdentifier")) return [];
+  const agg = CUMULATIVE_HINT.test(typeIdentifier) ? "SUM" : "AVG";
+  const clauses = ["type_identifier = ?"];
+  const args: unknown[] = [typeIdentifier];
+  if (filters.fromDay) {
+    clauses.push("day >= ?");
+    args.push(filters.fromDay);
+  }
+  if (filters.toDay) {
+    clauses.push("day <= ?");
+    args.push(filters.toDay);
+  }
+  if (filters.source) {
+    clauses.push("source_name = ?");
+    args.push(filters.source);
+  }
+  const rows = sqlite
+    .prepare(`
+      WITH perSource AS (
+        SELECT day, source_name AS source, ${agg}(value) AS val, COUNT(*) AS samples
+        FROM records
+        WHERE ${clauses.join(" AND ")}
+        GROUP BY day, source_name
+      ), ranked AS (
+        SELECT day, source, val,
+               ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, val DESC) AS rk
+        FROM perSource
+      )
+      SELECT day, ROUND(val, 2) AS value, source
+      FROM ranked
+      WHERE rk = 1
+      ORDER BY day DESC
+      LIMIT ?`)
+    .all(...args, maxDays) as { day: string; value: number; source: string }[];
+  return rows.reverse();
+}
+
+export function explorerSources(typeIdentifier: string): string[] {
+  const rows = sqlite
+    .prepare(`
+      SELECT DISTINCT source_name AS source
+      FROM records
+      WHERE type_identifier = ? AND source_name != ''
+      ORDER BY source_name`)
+    .all(typeIdentifier) as { source: string }[];
+  return rows.map((r) => r.source);
 }
 
 export function recentUploads(limit = 50) {
@@ -234,33 +725,42 @@ export function stepsSummary(days = 30) {
   // +42.7% inflation the audit found.
   const daily = stepsDaily(days);
   const total = daily.reduce((a, d) => a + d.value, 0);
-  const allTime = sqlite.prepare(`
-    WITH perSource AS (
-      SELECT day, source_name AS source, SUM(value) AS total, COUNT(*) AS samples
-      FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount'
-      GROUP BY day, source_name
-    ), ranked AS (
-      SELECT day, total, ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, total DESC) AS rk
-      FROM perSource
-    )
-    SELECT SUM(total) AS total FROM ranked WHERE rk = 1`).get() as { total: number | null };
+  const version = recordsVersion();
+  let allTimeTotal: number;
+  if (allTimeStepsCache && allTimeStepsCache.version === version) {
+    allTimeTotal = allTimeStepsCache.total;
+  } else {
+    const allTime = stmt(`
+      WITH perSource AS (
+        SELECT day, source_name AS source, SUM(value) AS total, COUNT(*) AS samples
+        FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierStepCount'
+        GROUP BY day, source_name
+      ), ranked AS (
+        SELECT day, total, ROW_NUMBER() OVER (PARTITION BY day ORDER BY samples DESC, total DESC) AS rk
+        FROM perSource
+      )
+      SELECT SUM(total) AS total FROM ranked WHERE rk = 1`).get() as { total: number | null };
+    allTimeTotal = allTime.total ?? 0;
+    allTimeStepsCache = { version, total: allTimeTotal };
+  }
   return {
     windowDays: days,
     days: daily.length,
     totalInWindow: total,
     avgPerDay: daily.length ? total / daily.length : 0,
-    allTimeSteps: allTime.total ?? 0,
+    allTimeSteps: allTimeTotal,
   };
 }
 
 export function sleepSummary(days = 30) {
-  const row = sqlite.prepare(`
-    SELECT SUM((end_ms - start_ms) / 3600000.0) AS hours, COUNT(DISTINCT ${NIGHT}) AS nights
-    FROM records
-    WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis' AND ${ASLEEP}
-      AND ${NIGHT} >= ?`).get(windowStart(days)) as { hours: number | null; nights: number };
-  const hours = row.hours ?? 0;
-  return { windowDays: days, nights: row.nights, totalHours: hours, avgPerNight: row.nights ? hours / row.nights : 0 };
+  const nights = sleepDailyHours(windowStart(days));
+  const hours = nights.reduce((sum, n) => sum + n.value, 0);
+  return {
+    windowDays: days,
+    nights: nights.length,
+    totalHours: hours,
+    avgPerNight: nights.length ? hours / nights.length : 0,
+  };
 }
 
 export function activitySummaryTotals(days = 30) {
@@ -295,9 +795,14 @@ export function activitySummaryTotals(days = 30) {
 
 export type DailyPoint = { day: string; value: number; source: string };
 
-export function dailySeriesSingleSource(typeIdentifier: string, days = 90, agg: "sum" | "avg" = "sum"): DailyPoint[] {
-  const fn = agg === "sum" ? "SUM(value)" : "AVG(value)";
-  return sqlite.prepare(`
+export function dailySeriesSingleSource(
+  typeIdentifier: string,
+  days = 90,
+  agg: "sum" | "avg" = "sum",
+  valueExpr = "value",
+): DailyPoint[] {
+  const fn = agg === "sum" ? `SUM(${valueExpr})` : `AVG(${valueExpr})`;
+  return stmt(`
     WITH perSource AS (
       SELECT day, source_name AS source, ${fn} AS value, COUNT(*) AS samples
       FROM records WHERE type_identifier = ? AND day >= ?
@@ -416,9 +921,10 @@ export function fiveKAttempts(days = 365): FiveKAttempt[] {
  * time running the same pace), then the earlier day for a stable result. Attempts shorter than
  * `FIVE_K_BEST_MIN_KM` cannot be the best 5K even if their pace is faster.
  */
-export function fiveKBest(days = 365): FiveKAttempt | null {
+/** Pick the best qualifying 5K attempt from an already-fetched attempts array. */
+export function pickBestFiveK(attempts: readonly FiveKAttempt[]): FiveKAttempt | null {
   let best: FiveKAttempt | null = null;
-  for (const attempt of fiveKAttempts(days)) {
+  for (const attempt of attempts) {
     if (attempt.km < FIVE_K_BEST_MIN_KM) continue;
     if (
       best === null ||
@@ -429,6 +935,10 @@ export function fiveKBest(days = 365): FiveKAttempt | null {
     }
   }
   return best;
+}
+
+export function fiveKBest(days = 365): FiveKAttempt | null {
+  return pickBestFiveK(fiveKAttempts(days));
 }
 
 /** Week-by-week volume: sessions, minutes, distance, average HR. */

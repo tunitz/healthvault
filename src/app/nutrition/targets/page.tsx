@@ -5,18 +5,12 @@ import { resolveTargets } from "@/lib/services/nutrition";
 import { getTimezone } from "@/lib/services/profile";
 import { num } from "@/lib/format";
 import { TargetsForm } from "@/components/nutrition/nutrition-forms";
-import { SubviewHeader, SubviewNav } from "@/components/subviews/subview-header";
+import { NutritionNav } from "@/components/nutrition/nutrition-nav";
+import { SubviewHeader } from "@/components/subviews/subview-header";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Nutrition targets" };
-
-const SECTIONS = [
-  { href: "/nutrition", label: "Diary" },
-  { href: "/nutrition/foods", label: "Foods" },
-  { href: "/nutrition/recipes", label: "Recipes" },
-  { href: "/nutrition/targets", label: "Targets" },
-] as const;
 
 export default async function NutritionTargetsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -44,7 +38,7 @@ export default async function NutritionTargetsPage(props: {
         backHref="/nutrition"
         backLabel="Nutrition diary"
       >
-        <SubviewNav label="Nutrition sections" items={SECTIONS} activeHref="/nutrition/targets" />
+        <NutritionNav />
       </SubviewHeader>
 
       <section className="flex flex-col gap-3" aria-labelledby="targets-current">

@@ -37,6 +37,34 @@ afterAll(() => {
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
+import { parseHealthXml, toKcal } from "@/lib/xml";
+
+describe("energy and numeric XML parsing", () => {
+  test("toKcal distinguishes Cal (kcal), cal (small calorie), kcal, and kJ", () => {
+    expect(toKcal(500, "Cal")).toBe(500);
+    expect(toKcal(500, "kcal")).toBe(500);
+    expect(toKcal(500, "KCAL")).toBe(500);
+    expect(toKcal(500, "cal")).toBeCloseTo(0.5, 6);
+    expect(toKcal(1000, "kJ")).toBeCloseTo(239.0057, 4);
+    expect(toKcal(500, undefined)).toBe(500);
+  });
+
+  test("num() guards NaN/Infinity and ActivitySummary normalises energy units", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><HealthData>
+      <Record type="HKQuantityTypeIdentifierBodyMass" unit="kg" value="not-a-number" startDate="2026-01-01 07:00:00 +0800" endDate="2026-01-01 07:00:00 +0800" sourceName="Scale"/>
+      <ActivitySummary dateComponents="2026-01-01" activeEnergyBurned="1000" activeEnergyBurnedGoal="2000" activeEnergyBurnedUnit="kJ" appleExerciseTime="30" appleStandHours="10"/>
+      <ActivitySummary dateComponents="2026-01-02" activeEnergyBurned="450" activeEnergyBurnedGoal="600" activeEnergyBurnedUnit="Cal"/>
+    </HealthData>`;
+    const parsed = parseHealthXml(xml);
+    expect(parsed.records[0].value).toBe(0);
+    expect(Number.isFinite(parsed.records[0].value)).toBe(true);
+    expect(parsed.summaries[0].activeEnergyBurned).toBeCloseTo(239.0057, 4);
+    expect(parsed.summaries[0].activeEnergyBurnedGoal).toBeCloseTo(478.0114, 4);
+    expect(parsed.summaries[1].activeEnergyBurned).toBe(450);
+    expect(parsed.summaries[1].activeEnergyBurnedGoal).toBe(600);
+  });
+});
+
 describe("workout distances ingested from XML", () => {
   test("unsupported units are preserved and missing units are not assumed to be kilometres", () => {
     const bySource = new Map(allWorkouts({ limit: 10 }).map((row) => [row.sourceName, row]));

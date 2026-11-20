@@ -2,8 +2,8 @@ import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { db, sqlite } from "@/db";
 import { supplementLogs, supplements } from "@/db/schema";
 import { addDays, localDay, localTimeMs, weekStart, weekdayIndex } from "@/lib/day";
-import { getTimezone } from "@/lib/services/profile";
-import { boolField, dayField, fail, idField, numField, str } from "@/lib/validate";
+import { getProfile, getTimezone, parseWheyLink } from "@/lib/services/profile";
+import { boolField, dayField, fail, idField, instantField, numField, str } from "@/lib/validate";
 
 export type Supplement = typeof supplements.$inferSelect;
 export type SupplementLog = typeof supplementLogs.$inferSelect;
@@ -96,13 +96,19 @@ export function updateSupplement(id: unknown, input: Record<string, unknown>): S
 /** Archive instead of delete when history exists, so past intake stays meaningful. */
 export function deleteSupplement(id: unknown): { deleted: boolean; archived: boolean } {
   const supplementId = idField(id);
-  const used = sqlite.prepare("SELECT COUNT(*) AS c FROM supplement_logs WHERE supplement_id = ?").get(supplementId) as { c: number };
-  if (used.c > 0) {
-    db.update(supplements).set({ active: 0, updatedAtMs: Date.now() }).where(eq(supplements.id, supplementId)).run();
-    return { deleted: false, archived: true };
-  }
-  const row = db.delete(supplements).where(eq(supplements.id, supplementId)).returning().get();
-  return { deleted: Boolean(row), archived: false };
+  return sqlite.transaction(() => {
+    const whey = parseWheyLink(getProfile());
+    if (whey?.supplementId === supplementId) {
+      fail("supplement is linked to one-tap whey; unlink it on /supplements before deleting", 409);
+    }
+    const used = sqlite.prepare("SELECT COUNT(*) AS c FROM supplement_logs WHERE supplement_id = ?").get(supplementId) as { c: number };
+    if (used.c > 0) {
+      db.update(supplements).set({ active: 0, updatedAtMs: Date.now() }).where(eq(supplements.id, supplementId)).run();
+      return { deleted: false, archived: true };
+    }
+    const row = db.delete(supplements).where(eq(supplements.id, supplementId)).returning().get();
+    return { deleted: Boolean(row), archived: false };
+  })();
 }
 
 /** Upsert today's intake for one supplement; `taken: false` removes the log. */
@@ -132,13 +138,8 @@ export function logSupplement(
   const unit = str(input.unit ?? supplement.unit, "unit", { max: 40 }) ?? supplement.unit;
   let takenAtMs = Date.now();
   if (input.takenAt !== undefined && input.takenAt !== null && input.takenAt !== "") {
-    if (typeof input.takenAt === "number") {
-      takenAtMs = numField(input.takenAt, "takenAt", { min: 0, max: Date.now() + 86_400_000 })!;
-    } else if (typeof input.takenAt === "string" && !Number.isNaN(Date.parse(input.takenAt))) {
-      takenAtMs = Date.parse(input.takenAt);
-    } else {
-      fail("takenAt must be an ISO timestamp or epoch ms");
-    }
+    takenAtMs = instantField(input.takenAt, "takenAt", tz);
+    if (takenAtMs < 0 || takenAtMs > Date.now() + 86_400_000) fail("takenAt is outside the accepted range");
   } else if (day !== localDay(Date.now(), tz)) {
     takenAtMs = localTimeMs(day, "12:00", tz);
   }
@@ -177,6 +178,30 @@ export function logSupplement(
   return { logged: true, log: publicLog, supplement };
 }
 
+/** Log multiple supplements in one atomic transaction (up to 50 entries). */
+export function logSupplementsBatch(
+  entries: unknown,
+  defaultDay?: unknown,
+): { count: number; results: ReturnType<typeof logSupplement>[] } {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    fail("entries must be a non-empty array");
+  }
+  if (entries.length > 50) fail("at most 50 supplement log entries per call");
+  return sqlite.transaction(() => {
+    const results = entries.map((raw, index) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        fail(`entries[${index}] must be an object`);
+      }
+      const item = raw as Record<string, unknown>;
+      return logSupplement({
+        ...(defaultDay !== undefined && item.day === undefined ? { day: defaultDay } : {}),
+        ...item,
+      });
+    });
+    return { count: results.length, results };
+  })();
+}
+
 export type ChecklistItem = {
   supplement: Supplement;
   schedule: Schedule;
@@ -212,9 +237,10 @@ export type NextSupplement = ChecklistItem & { due: true; dueAtMs: number };
 export function dueSupplements(
   day: string = localDay(Date.now(), getTimezone()),
   nowMs = Date.now(),
+  prefetchedChecklist?: ReturnType<typeof todayChecklist>,
 ): NextSupplement[] {
   const tz = getTimezone();
-  const checklist = todayChecklist(day);
+  const checklist = prefetchedChecklist ?? todayChecklist(day);
   return checklist.items
     .filter((item) => !item.logged && item.schedule.time !== null)
     .map((item) => ({ item, dueAtMs: localTimeMs(day, item.schedule.time!, tz) }))
@@ -230,8 +256,9 @@ export function dueSupplements(
 export function nextSupplement(
   day: string = localDay(Date.now(), getTimezone()),
   nowMs = Date.now(),
+  prefetchedChecklist?: ReturnType<typeof todayChecklist>,
 ): NextSupplement | null {
-  return dueSupplements(day, nowMs)[0] ?? null;
+  return dueSupplements(day, nowMs, prefetchedChecklist)[0] ?? null;
 }
 
 export function supplementHistory(days = 30): {

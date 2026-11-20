@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { foodLog, foodLogIngredients, foods, recipeIngredients, recipes } from "@/db/schema";
 import { resolveMeasureGrams } from "@/lib/services/measures";
@@ -188,16 +188,17 @@ function resolveIngredientRow(row: IngredientRowLike, food: FoodRow | null | und
 
 function resolveIngredients(recipeId: number): ResolvedIngredient[] {
   const rows = db
-    .select()
+    .select({
+      ingredient: recipeIngredients,
+      food: foods,
+    })
     .from(recipeIngredients)
+    .leftJoin(foods, eq(foods.id, recipeIngredients.foodId))
     .where(eq(recipeIngredients.recipeId, recipeId))
     .orderBy(recipeIngredients.position, recipeIngredients.id)
     .all();
 
-  return rows.map((row) => {
-    const food = row.foodId === null ? null : db.select().from(foods).where(eq(foods.id, row.foodId)).get();
-    return resolveIngredientRow(row, food);
-  });
+  return rows.map(({ ingredient, food }) => resolveIngredientRow(ingredient, food));
 }
 
 function totalsOf(
@@ -231,6 +232,42 @@ function totalsOf(
     },
   };
   return { total, perServing };
+}
+
+/** Batched totals for a page of recipes in two queries instead of 2 + N. */
+export function recipeTotalsBatch(
+  recipeList: readonly { id: number; servingsTotal: number }[],
+): Map<number, { total: RecipeTotals; perServing: RecipeTotals; resolvedCount: number; ingredientCount: number }> {
+  const out = new Map<
+    number,
+    { total: RecipeTotals; perServing: RecipeTotals; resolvedCount: number; ingredientCount: number }
+  >();
+  if (recipeList.length === 0) return out;
+  const ids = recipeList.map((r) => r.id);
+  const rows = db
+    .select({
+      ingredient: recipeIngredients,
+      food: foods,
+    })
+    .from(recipeIngredients)
+    .leftJoin(foods, eq(foods.id, recipeIngredients.foodId))
+    .where(inArray(recipeIngredients.recipeId, ids))
+    .orderBy(recipeIngredients.recipeId, recipeIngredients.position, recipeIngredients.id)
+    .all();
+
+  const grouped = new Map<number, ResolvedIngredient[]>();
+  for (const { ingredient, food } of rows) {
+    const list = grouped.get(ingredient.recipeId) ?? [];
+    list.push(resolveIngredientRow(ingredient, food));
+    grouped.set(ingredient.recipeId, list);
+  }
+  for (const recipe of recipeList) {
+    const ingredients = grouped.get(recipe.id) ?? [];
+    const { total, perServing } = totalsOf(ingredients, recipe.servingsTotal);
+    const resolvedCount = ingredients.filter((i) => i.resolved).length;
+    out.set(recipe.id, { total, perServing, resolvedCount, ingredientCount: ingredients.length });
+  }
+  return out;
 }
 
 /** Total and per-serving values for a recipe. Throws 404 when the recipe does not exist. */
@@ -677,4 +714,38 @@ export function deleteRecipe(id: unknown): RecipeDeleteResult {
     tx.delete(recipes).where(eq(recipes.id, recipeId)).run();
   });
   return { deleted: true, archived: false };
+}
+
+/** Restore an archived recipe back to the active list without altering logged snapshots. */
+export function unarchiveRecipe(id: unknown): RecipeDetail {
+  const recipeId = idField(id);
+  const existing = db.select().from(recipes).where(eq(recipes.id, recipeId)).get();
+  if (!existing) fail("recipe not found", 404);
+  if (existing.archivedAtMs !== null) {
+    db.update(recipes)
+      .set({ archivedAtMs: null, archivedReason: null, updatedAtMs: Date.now() })
+      .where(eq(recipes.id, recipeId))
+      .run();
+  }
+  return getRecipe(recipeId);
+}
+
+/** Clone a recipe with an optional batch scale factor (e.g. 0.5x or 2x). */
+export function cloneRecipe(id: unknown, scale = 1): RecipeDetail {
+  const source = getRecipe(id);
+  const factor = numField(scale, "scale", { min: 0.1, max: 10 }) ?? 1;
+  const scaledServings = Math.max(1, Math.min(100, Math.round(source.servingsTotal * factor)));
+  const suffix = factor === 1 ? " (copy)" : ` (${factor}×)`;
+  const name = `${source.name}${suffix}`.slice(0, 200);
+  const ingredients = source.ingredients.map((ing) => ({
+    ...(ing.foodId !== null ? { foodId: ing.foodId } : {}),
+    ...(ing.name ? { name: ing.name } : {}),
+    grams: Math.max(0.1, Math.round(ing.grams * factor * 10) / 10),
+  }));
+  return createRecipe({
+    name,
+    servings: scaledServings,
+    ...(source.note ? { note: source.note } : {}),
+    ingredients,
+  });
 }

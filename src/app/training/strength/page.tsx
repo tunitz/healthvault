@@ -46,7 +46,9 @@ export default async function ActivityStrengthPage(props: {
     selectedExercise !== null && !exercises.includes(selectedExercise)
       ? [selectedExercise, ...exercises]
       : exercises;
-  const progression = selectedExercise === null ? [] : exerciseProgression(selectedExercise, 8);
+  const rawWeeks = typeof params.weeks === "string" ? Number.parseInt(params.weeks, 10) : 8;
+  const progressionWeeks = rawWeeks === 16 || rawWeeks === 52 ? rawWeeks : 8;
+  const progression = selectedExercise === null ? [] : exerciseProgression(selectedExercise, progressionWeeks);
   const strengthWeek = strengthContext();
 
   const workoutOptions: StrengthWorkoutOption[] = workoutsBetween(addDays(today, -13), today).map(
@@ -82,6 +84,7 @@ export default async function ActivityStrengthPage(props: {
         exercises={exerciseOptions}
         selectedExercise={selectedExercise}
         progression={progression}
+        progressionWeeks={progressionWeeks}
         workoutOptions={workoutOptions}
         sessionsThisWeek={strengthWeek.sessionsThisWeek}
         weekOffset={weekOffset}

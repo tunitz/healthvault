@@ -21,6 +21,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { applyFoodTemplateAction } from "@/app/actions";
+import { ActionForm, SubmitButton } from "@/components/action-form";
+import { listFoodTemplates } from "@/lib/services/food-templates";
 import { DeleteFoodForm, FoodForm } from "@/components/nutrition/food-forms";
 import { NutritionNav } from "@/components/nutrition/nutrition-nav";
 
@@ -97,13 +100,13 @@ export default async function FoodsPage(props: {
   const query = (typeof params.q === "string" ? params.q.trim() : "").slice(0, 120);
   const requested = typeof params.page === "string" ? Number.parseInt(params.page, 10) : 1;
 
-  // The bounded list query returns the total, so clamp a stale page before fetching the rows.
-  const count = listFoods({ query, limit: 1 }).total;
-  const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
-  const page = Number.isFinite(requested)
-    ? Math.min(Math.max(1, Math.trunc(requested)), totalPages)
-    : 1;
-  const result = listFoods({ query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+  const requestedPage = Number.isFinite(requested) ? Math.max(1, Math.trunc(requested)) : 1;
+  let result = listFoods({ query, limit: PAGE_SIZE, offset: (requestedPage - 1) * PAGE_SIZE });
+  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const page = Math.min(requestedPage, totalPages);
+  if (page !== requestedPage) {
+    result = listFoods({ query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+  }
   const items = result.items;
   const total = result.total;
   const firstRow = items.length > 0 ? (page - 1) * PAGE_SIZE + 1 : 0;
@@ -152,8 +155,45 @@ export default async function FoodsPage(props: {
               </Button>
             </CardAction>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-5">
             <FoodForm key={editing.id} food={toFormValues(editing)} cancelHref={cancelHref} />
+            <details className="rounded-lg border border-border">
+              <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium">
+                Apply measure / yield template
+              </summary>
+              <ActionForm
+                action={applyFoodTemplateAction}
+                className="flex flex-col gap-3 border-t border-border p-3"
+              >
+                <input type="hidden" name="id" value={editing.id} />
+                <p className="text-xs text-muted-foreground">
+                  Applies household-measure gram weights or raw/dry cooking yield factors without touching per-100 g nutrition.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    name="template"
+                    required
+                    defaultValue=""
+                    aria-label="Food template"
+                    className="h-9 max-sm:h-11 min-w-52 flex-1 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                  >
+                    <option value="" disabled>Choose a template…</option>
+                    {listFoodTemplates().map((tpl) => (
+                      <option key={tpl.slug} value={tpl.slug}>
+                        {tpl.label} — {tpl.description}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <input type="checkbox" name="overwrite" className="size-4 accent-[var(--primary)]" />
+                    Overwrite existing basis/measures
+                  </label>
+                  <SubmitButton size="sm" variant="outline">
+                    Apply template
+                  </SubmitButton>
+                </div>
+              </ActionForm>
+            </details>
           </CardContent>
         </Card>
       ) : (
@@ -210,6 +250,11 @@ export default async function FoodsPage(props: {
               aria-label="Search foods"
               className="h-11 flex-1 sm:h-8 sm:w-56 sm:flex-none"
             />
+            {query ? (
+              <Button asChild variant="ghost" size="icon-sm" className="max-sm:size-11" aria-label="Clear search" title="Clear search">
+                <Link href="/nutrition/foods">×</Link>
+              </Button>
+            ) : null}
             <Button type="submit" variant="outline" size="sm">
               Search
             </Button>

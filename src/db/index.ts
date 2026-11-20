@@ -124,6 +124,11 @@ withMigrationLock(() => {
   sqlite.pragma("journal_mode = WAL");
   migrate(db, { migrationsFolder });
 });
+sqlite.pragma("foreign_keys = ON");
+sqlite.pragma("temp_store = MEMORY");
+sqlite.pragma("cache_size = -64000");
+sqlite.pragma("mmap_size = 268435456");
+sqlite.pragma("synchronous = NORMAL");
 
 // An ingest cannot survive a restart: any row still "running" at boot was interrupted.
 // Mark it failed so the UI stops showing a spinner that will never finish.

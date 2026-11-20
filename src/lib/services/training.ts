@@ -10,7 +10,7 @@ import { sqlite } from "@/db";
 import {
   lastWorkoutDay,
   restingHeartRateDaily,
-  sleepByDayStage,
+  sleepDailyHours,
   stepsDaily,
   workoutsBetween,
 } from "@/db/queries";
@@ -25,9 +25,6 @@ export const MAX_WEEK_OFFSET = 8;
 const RUNNING = "running";
 /** Apple writes strength work as Functional/TraditionalStrengthTraining. */
 const STRENGTH = "strength";
-
-/** Stages that count as sleep; Awake (3) and InBed (1) are never added (see `@/db/queries`). */
-const ASLEEP_STAGES = new Set([2, 4, 5, 6]);
 
 export type WeeklySummary = {
   weekStart: string;
@@ -53,7 +50,10 @@ function sumKnown(values: (number | null)[]): number {
   return values.reduce<number>((total, value) => (value === null ? total : total + value), 0);
 }
 
-export function weeklySummary(weekOffset = 0): WeeklySummary {
+export function weeklySummary(
+  weekOffset = 0,
+  prefetchedFreshness?: { lastRecordDay: string | null; lastWorkoutDay: string | null },
+): WeeklySummary {
   const offset = normalizeOffset(weekOffset);
   const timezone = getTimezone();
   const today = localDay(Date.now(), timezone);
@@ -77,14 +77,8 @@ export function weeklySummary(weekOffset = 0): WeeklySummary {
   const stepRows = stepsDaily(spanDays).filter((p) => p.day >= start && p.day <= end);
   const stepTotal = stepRows.reduce((total, p) => total + p.value, 0);
 
-  const sleepByNight = new Map<string, number>();
-  for (const segment of sleepByDayStage(spanDays)) {
-    if (segment.day < start || segment.day > end) continue;
-    if (!ASLEEP_STAGES.has(segment.stage)) continue;
-    sleepByNight.set(segment.day, (sleepByNight.get(segment.day) ?? 0) + segment.hours);
-  }
-  const sleepHours = [...sleepByNight.values()];
-  const sleepTotal = sleepHours.reduce((total, hours) => total + hours, 0);
+  const sleepRows = sleepDailyHours(start, end);
+  const sleepTotal = sleepRows.reduce((total, row) => total + row.value, 0);
 
   const restingRows = restingHeartRateDaily(spanDays).filter((p) => p.day >= start && p.day <= end);
   const restingTotal = restingRows.reduce((total, p) => total + p.value, 0);
@@ -96,11 +90,10 @@ export function weeklySummary(weekOffset = 0): WeeklySummary {
 
   // `stale` means the imported record data ends before the displayed week: a quiet week and a
   // missing export must not look the same. A missing record day counts as stale.
-  const lastRecord = sqlite.prepare("SELECT MAX(day) AS day FROM records").get() as {
-    day: string | null;
-  };
-  const lastRecordDay = lastRecord.day;
-  const latestWorkoutDay = lastWorkoutDay();
+  const lastRecordDay = prefetchedFreshness
+    ? prefetchedFreshness.lastRecordDay
+    : ((sqlite.prepare("SELECT MAX(day) AS day FROM records").get() as { day: string | null }).day);
+  const latestWorkoutDay = prefetchedFreshness ? prefetchedFreshness.lastWorkoutDay : lastWorkoutDay();
 
   return {
     weekStart: start,
@@ -121,8 +114,8 @@ export function weeklySummary(weekOffset = 0): WeeklySummary {
       daysWithData: stepRows.length,
     },
     sleep: {
-      avgPerNight: sleepHours.length ? sleepTotal / sleepHours.length : 0,
-      nights: sleepHours.length,
+      avgPerNight: sleepRows.length ? sleepTotal / sleepRows.length : 0,
+      nights: sleepRows.length,
     },
     restingHr: {
       avg: restingRows.length ? restingTotal / restingRows.length : null,

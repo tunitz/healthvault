@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { useActionState, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { deleteFoodAction, saveFoodAction } from "@/app/actions";
 import { Field, SubmitButton } from "@/components/action-form";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ActionState, FoodFormState } from "@/lib/action-state";
@@ -146,6 +147,9 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
             defaultValue={food?.servingGrams ?? 100}
           />
         </Field>
+        <Field label="Barcode" hint="Optional">
+          <FoodInput name="barcode" maxLength={64} defaultValue={food?.barcode ?? ""} />
+        </Field>
       </div>
 
       <fieldset className="flex flex-col gap-3">
@@ -269,7 +273,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
           Per-food grams per unit. Shared defaults still apply to units you do not list.
         </p>
         {rows.length > 0 ? (
-          <div className="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-end gap-2">
+          <div className="hidden grid-cols-[minmax(0,1fr)_5.5rem_auto] items-end gap-2 sm:grid">
             <span className="text-[11px] text-muted-foreground">Unit</span>
             <span className="text-[11px] text-muted-foreground">Grams</span>
             <span className="sr-only">Remove</span>
@@ -278,7 +282,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
           <p className="text-xs text-muted-foreground">No per-food overrides.</p>
         )}
         {rows.map((row, index) => (
-          <div key={index} className="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-center gap-2">
+          <div key={index} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_5.5rem_auto]">
             <FoodInput
               name="measureName"
               value={row.name}
@@ -309,12 +313,13 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
               }
               placeholder="grams"
               aria-label={`Measure ${index + 1} grams`}
+              className="col-span-1 sm:col-span-1"
             />
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
-              className="max-sm:size-11"
+              className="col-start-2 row-start-1 max-sm:size-11 sm:col-start-auto sm:row-start-auto"
               aria-label={`Remove measure ${row.name.trim() || index + 1}`}
               onClick={() => setRows((current) => current.filter((_, itemIndex) => itemIndex !== index))}
             >
@@ -379,6 +384,9 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
 
 export function DeleteFoodForm({ id, name }: { id: number; name: string }) {
   const [state, formAction] = useActionState<ActionState, FormData>(deleteFoodAction, { ok: true });
+  const [open, setOpen] = useState(false);
+  const confirmedRef = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     // The service's 409 text is the useful part; show it verbatim in a toast rather than
@@ -389,23 +397,43 @@ export function DeleteFoodForm({ id, name }: { id: number; name: string }) {
   const confirm = `Delete "${name}"? This cannot be undone. Foods used by logged meals, recipes or meal ingredients cannot be deleted.`;
 
   return (
-    <form
-      action={formAction}
-      onSubmit={(event) => {
-        if (!window.confirm(confirm)) event.preventDefault();
-      }}
-    >
-      <input type="hidden" name="id" value={id} />
-      <SubmitButton
-        variant="ghost"
-        size="icon-sm"
-        className="max-sm:size-11"
-        aria-label={`Delete ${name}`}
-        title={`Delete ${name}`}
-        pendingLabel={<span className="sr-only">Deleting</span>}
+    <>
+      <form
+        ref={formRef}
+        action={formAction}
+        onSubmit={(event) => {
+          if (!confirmedRef.current) {
+            event.preventDefault();
+            setOpen(true);
+            return;
+          }
+          confirmedRef.current = false;
+        }}
       >
-        <Trash2 aria-hidden />
-      </SubmitButton>
-    </form>
+        <input type="hidden" name="id" value={id} />
+        <SubmitButton
+          variant="ghost"
+          size="icon-sm"
+          className="max-sm:size-11"
+          aria-label={`Delete ${name}`}
+          title={`Delete ${name}`}
+          pendingLabel={<span className="sr-only">Deleting</span>}
+        >
+          <Trash2 aria-hidden />
+        </SubmitButton>
+      </form>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Delete ${name}?`}
+        description={confirm}
+        confirmLabel="Delete food"
+        onConfirm={() => {
+          confirmedRef.current = true;
+          setOpen(false);
+          formRef.current?.requestSubmit();
+        }}
+      />
+    </>
   );
 }

@@ -1,6 +1,8 @@
 "use client";
 
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { saveProfileAction, saveWorkScheduleAction } from "@/app/actions";
 import { formatSeconds } from "@/lib/format";
@@ -15,10 +17,39 @@ const AREA =
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+const FALLBACK_ZONES = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Europe/London",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Asia/Manila",
+  "Asia/Shanghai",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+];
+
+function cmToFtIn(cm: number | null): { ft: string; inches: string } {
+  if (cm === null || !Number.isFinite(cm)) return { ft: "", inches: "" };
+  const totalIn = cm / 2.54;
+  const ft = Math.floor(totalIn / 12);
+  const inches = Math.round((totalIn - ft * 12) * 10) / 10;
+  return { ft: String(ft), inches: String(inches) };
+}
+
+function kgToLb(kg: number | null): string {
+  if (kg === null || !Number.isFinite(kg)) return "";
+  return String(Math.round((kg / 0.45359237) * 10) / 10);
+}
+
 export function ProfileForm({
   profile,
   age,
-  units,
+  units: initialUnits,
   goalSeconds,
 }: {
   profile: Profile;
@@ -26,6 +57,33 @@ export function ProfileForm({
   units: Units;
   goalSeconds: number;
 }) {
+  const [selectedUnits, setSelectedUnits] = useState<Units>(initialUnits);
+  const [timezone, setTimezone] = useState(profile.timezone);
+  const hydrated = useSyncExternalStore(() => () => {}, () => true, () => false);
+  const imperialHeight = useMemo(() => cmToFtIn(profile.heightCm), [profile.heightCm]);
+
+  // Populate full IANA timezone list only on the client after hydration so SSR and client match.
+  const timezones = useMemo(() => {
+    if (!hydrated) return FALLBACK_ZONES;
+    try {
+      const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+      const supported = intl.supportedValuesOf?.("timeZone");
+      if (supported && supported.length > 0) return supported;
+    } catch {
+      // Keep FALLBACK_ZONES
+    }
+    return FALLBACK_ZONES;
+  }, [hydrated]);
+
+  function useBrowserTimezone() {
+    try {
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (detected) setTimezone(detected);
+    } catch {
+      // Ignore if environment omits Intl timezone detection
+    }
+  }
+
   return (
     <ActionForm action={saveProfileAction} className="grid gap-4 sm:grid-cols-2">
       <Field label="Name">
@@ -33,7 +91,7 @@ export function ProfileForm({
       </Field>
 
       <Field label="Date of birth" hint={age === null ? "Used for age-based suggestions" : `${age} years old`}>
-        <Input name="birthDate" type="date" defaultValue={profile.birthDate ?? ""} max={new Date().toISOString().slice(0, 10)} />
+        <Input name="birthDate" type="date" defaultValue={profile.birthDate ?? ""} />
       </Field>
 
       <Field label="Sex">
@@ -45,31 +103,100 @@ export function ProfileForm({
         </select>
       </Field>
 
-      <Field
-        label="Height (cm)"
-        hint={
-          profile.heightCm && units === "imperial"
-            ? `Shown as ${formatHeight(profile.heightCm, units)}`
-            : "Used for suggestions"
-        }
-      >
-        <Input name="heightCm" type="number" inputMode="decimal" step="0.1" min="50" max="260" defaultValue={profile.heightCm ?? ""} />
-      </Field>
+      {selectedUnits === "imperial" ? (
+        <Field
+          label="Height (ft / in)"
+          hint={profile.heightCm ? `Stored as ${profile.heightCm} cm` : "Converted to cm on save"}
+        >
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              name="heightFt"
+              type="number"
+              inputMode="numeric"
+              step="1"
+              min="1"
+              max="8"
+              placeholder="ft"
+              aria-label="Height feet"
+              defaultValue={imperialHeight.ft}
+            />
+            <Input
+              name="heightIn"
+              type="number"
+              inputMode="decimal"
+              step="0.1"
+              min="0"
+              max="11.9"
+              placeholder="in"
+              aria-label="Height inches"
+              defaultValue={imperialHeight.inches}
+            />
+          </div>
+        </Field>
+      ) : (
+        <Field
+          label="Height (cm)"
+          hint={
+            profile.heightCm && initialUnits === "imperial"
+              ? `Shown as ${formatHeight(profile.heightCm, initialUnits)}`
+              : "Used for suggestions"
+          }
+        >
+          <Input name="heightCm" type="number" inputMode="decimal" step="0.1" min="50" max="260" defaultValue={profile.heightCm ?? ""} />
+        </Field>
+      )}
 
-      <Field label="Timezone" hint="IANA name, e.g. Asia/Shanghai">
-        <Input name="timezone" defaultValue={profile.timezone} autoComplete="off" spellCheck={false} />
+      <Field label="Timezone" hint="Search any IANA zone or detect from your browser">
+        <div className="flex gap-2">
+          <Input
+            name="timezone"
+            list="iana-timezones"
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={useBrowserTimezone} className="shrink-0">
+            Detect
+          </Button>
+        </div>
+        <datalist id="iana-timezones">
+          {timezones.map((tz) => (
+            <option key={tz} value={tz} />
+          ))}
+        </datalist>
       </Field>
 
       <Field label="Units">
-        <select name="units" defaultValue={profile.units} className={SELECT}>
+        <select
+          name="units"
+          value={selectedUnits}
+          onChange={(e) => setSelectedUnits(e.target.value === "imperial" ? "imperial" : "metric")}
+          className={SELECT}
+        >
           <option value="metric">Metric (kg, cm)</option>
-          <option value="imperial">Imperial (lb, in)</option>
+          <option value="imperial">Imperial (lb, ft/in)</option>
         </select>
       </Field>
 
-      <Field label="Goal weight (kg)">
-        <Input name="goalWeightKg" type="number" inputMode="decimal" step="0.1" min="20" max="400" defaultValue={profile.goalWeightKg ?? ""} />
-      </Field>
+      {selectedUnits === "imperial" ? (
+        <Field label="Goal weight (lb)" hint="Converted to kg on save">
+          <Input
+            name="goalWeightLb"
+            type="number"
+            inputMode="decimal"
+            step="0.1"
+            min="44"
+            max="880"
+            defaultValue={kgToLb(profile.goalWeightKg)}
+          />
+        </Field>
+      ) : (
+        <Field label="Goal weight (kg)">
+          <Input name="goalWeightKg" type="number" inputMode="decimal" step="0.1" min="20" max="400" defaultValue={profile.goalWeightKg ?? ""} />
+        </Field>
+      )}
 
       <Field label="5K goal time" hint="mm:ss — target pace is derived">
         <Input

@@ -5,9 +5,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const SECTIONS = [
-  { href: "/nutrition", label: "Day" },
+  { href: "/nutrition", label: "Diary" },
   { href: "/nutrition/foods", label: "Foods" },
   { href: "/nutrition/recipes", label: "Recipes" },
+  { href: "/nutrition/targets", label: "Targets" },
   { href: "/nutrition/corrections", label: "Past meals" },
 ] as const;
 

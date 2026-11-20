@@ -1,20 +1,44 @@
 # @healthvault/mcp
 
-An MCP stdio server for HealthVault. It exposes the same 38 tools the app's
-`POST /api/agent/<tool>` endpoint serves — context, profile, measurements, foods,
-meals, recipes, ingredient snapshots, scoped history refresh, nutrition,
-supplements, training/strength context, and Apple Health reads — to any MCP harness
-(OpenCode, Claude Code, Claude Desktop, Cursor, …). It replaces the OpenCode-only
-plugin in `plugins/opencodev2`.
+An MCP stdio server for HealthVault. It exposes the same 53 tools (plus MCP
+resources and prompts) that the app's `POST /api/agent/<tool>` and direct
+Streamable HTTP `POST /api/mcp` endpoints serve — context, profile,
+measurements, foods, meals, recipes, ingredient snapshots, scoped history
+refresh, nutrition, supplements, one-tap whey, 16-week training block, strength
+logging, analytics (`weekly_summary`, `five_k_progress`, `sleep_stages`,
+`supplement_adherence`, `recipe_preview`), and Apple Health reads — to any MCP
+harness (OpenCode, Claude Code, Claude Desktop, Cursor, …).
 
 ## Install
 
+From the HealthVault repository root:
+
 ```bash
-bun install -g /home/tunitz/projects/healthvault/plugins/healthvault
+bun install -g ./plugins/healthvault
 ```
 
 That links the `healthvault-mcp` command. Bun runs the TypeScript entry directly;
 no build step is needed.
+
+## Direct Streamable HTTP transport (`POST /api/mcp`)
+
+HealthVault also serves MCP natively over HTTP at `POST /api/mcp` (JSON-RPC 2.0,
+supporting both single and batch requests, compact JSON responses with
+`structuredContent`, plus `resources/list`, `resources/read`, `prompts/list`,
+and `prompts/get`).
+
+- Manage MCP enablement, LAN access, and token rotation directly in the web UI
+  under **Settings → MCP** (`/settings/mcp`).
+- Local loopback connections are allowed by default when MCP is enabled; for
+  remote / LAN / Tailscale clients, enable **Allow LAN access** in Settings → MCP
+  (and set `HEALTHVAULT_TRUST_PROXY=1` when behind a reverse proxy).
+- Send `Authorization: Bearer <token>` and `Content-Type: application/json`.
+
+## MCP Resources & Prompts
+
+- **Resources:** `healthvault://context`, `healthvault://profile`,
+  `healthvault://nutrition/today`, `healthvault://training/block`
+- **Prompts:** `daily_checkin`, `weekly_training_review`, `meal_audit`
 
 ## Configuration
 
@@ -126,10 +150,12 @@ Any client that can send HTTP can use the same surface:
 
 ```bash
 curl -sS http://127.0.0.1:3040/api/agent/healthvault_context \
+  -H "Authorization: Bearer $HEALTHVAULT_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{}'
 ```
 
 Every tool is `POST /api/agent/<tool>` with a JSON object body; responses are
-`{ "ok": true, "result": ... }` (or `{ "ok": false, "error": "..." }`).
-`GET /api/agent` lists the tool names.
+`{ "ok": true, "tool": "<tool>", "result": ... }` (or
+`{ "ok": false, "tool": "<tool>", "error": "..." }`).
+`GET /api/agent` lists all 53 tool names.

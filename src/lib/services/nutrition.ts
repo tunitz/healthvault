@@ -9,7 +9,7 @@ import {
   measuresMap,
   resolveMeasureGrams,
 } from "@/lib/services/measures";
-import { getProfile, getTimezone, suggestedTargets } from "@/lib/services/profile";
+import { getProfile, getTimezone, parseWheyLink, suggestedTargets } from "@/lib/services/profile";
 import { applyTemplateDefaults, findFoodTemplate, templateChangesBasis } from "@/lib/services/food-templates";
 import {
   copyIngredientSnapshots,
@@ -31,7 +31,7 @@ import {
   computeRecipeServing,
   servingFractionField,
 } from "@/lib/services/recipe-serving";
-import { dayField, enumField, fail, idField, numField, str } from "@/lib/validate";
+import { dayField, enumField, fail, idField, instantField as parseInstantField, numField, str } from "@/lib/validate";
 
 export const MEALS = ["breakfast", "lunch", "dinner", "snack"] as const;
 export type Meal = (typeof MEALS)[number];
@@ -171,6 +171,52 @@ function providedPer100Macros(input: Record<string, unknown>): Partial<Macros> {
  * Targets
  * ------------------------------------------------------------------------------------------- */
 
+/**
+ * Build an in-memory target resolver that loads `nutrition_targets`, `profile`, and latest weight
+ * at most once, so multi-day range queries resolve targets in O(1) without N+1 SQL queries.
+ */
+export function createTargetResolver(): (day: string) => Targets {
+  const allRows = db
+    .select()
+    .from(nutritionTargets)
+    .orderBy(desc(nutritionTargets.effectiveFrom))
+    .all();
+  let suggestedCache: Macros | null = null;
+  const getSuggested = (): Macros => {
+    if (!suggestedCache) {
+      const profile = getProfile();
+      const weight = latestMeasurement("weight")?.value ?? 75;
+      suggestedCache = suggestedTargets(profile, weight);
+    }
+    return suggestedCache;
+  };
+
+  return (day: string): Targets => {
+    const applicable = allRows.filter((row) => row.effectiveFrom <= day);
+    const newest = applicable[0];
+    if (!newest) {
+      return { ...getSuggested(), effectiveFrom: day, source: "suggested" };
+    }
+    const pick = (key: keyof Macros): number => {
+      for (const row of applicable) {
+        const value = row[key];
+        if (typeof value === "number") return value;
+      }
+      return getSuggested()[key];
+    };
+    return {
+      effectiveFrom: newest.effectiveFrom,
+      source: "manual",
+      kcal: pick("kcal"),
+      proteinG: pick("proteinG"),
+      carbsG: pick("carbsG"),
+      fatG: pick("fatG"),
+      fibreG: pick("fibreG"),
+      sodiumMg: pick("sodiumMg"),
+    };
+  };
+}
+
 export function resolveTargets(day: string = localDay(Date.now(), getTimezone())): Targets {
   const rows = db
     .select()
@@ -264,18 +310,20 @@ function measuresJsonFromInput(
   return map === null ? null : JSON.stringify(map);
 }
 
-export function searchFoods(query: unknown, limit = 20): FoodWithMeasures[] {
+export function searchFoods(query: unknown, limit = 20, offset = 0): FoodWithMeasures[] {
   const q = str(query, "query", { max: 120 });
   const capped = Number.isFinite(limit) ? Math.min(Math.max(1, Math.trunc(limit)), 100) : 20;
+  const skip = Number.isFinite(offset) && offset > 0 ? Math.min(Math.trunc(offset), 1_000_000) : 0;
   const defaults = measureDefaults();
   const rows = !q
-    ? db.select().from(foods).orderBy(desc(foods.updatedAtMs)).limit(capped).all()
+    ? db.select().from(foods).orderBy(desc(foods.updatedAtMs)).limit(capped).offset(skip).all()
     : db
         .select()
         .from(foods)
         .where(or(like(foods.name, `%${q.replace(/[%_]/g, "")}%`), like(foods.brand, `%${q.replace(/[%_]/g, "")}%`)))
         .orderBy(desc(foods.updatedAtMs))
         .limit(capped)
+        .offset(skip)
         .all();
   return rows.map((row) => foodWithMeasures(row, defaults));
 }
@@ -380,26 +428,59 @@ export function addFood(input: Record<string, unknown>): FoodWithMeasures {
   const m = per100Macros(input);
   const servingGrams = numField(input.servingGrams ?? 100, "servingGrams", { min: 1, max: 10_000 }) ?? 100;
   const now = Date.now();
-  const existing = db
-    .select()
-    .from(foods)
-    .where(and(eq(foods.name, name), brand === null ? sql`${foods.brand} IS NULL` : eq(foods.brand, brand)))
-    .get();
 
-  const state =
-    input.state === undefined || input.state === null || input.state === ""
-      ? existing?.state ?? "raw"
-      : enumField(input.state, "state", FOOD_STATES)!;
-  const yieldFactor =
-    input.yieldFactor === undefined || input.yieldFactor === null || input.yieldFactor === ""
-      ? existing?.yieldFactor ?? 1
-      : numField(input.yieldFactor, "yieldFactor", { required: true, min: 0.01, max: 10 })!;
-  const measuresJson = measuresJsonFromInput(input, existing);
+  return sqlite.transaction(() => {
+    const existing = db
+      .select()
+      .from(foods)
+      .where(and(eq(foods.name, name), brand === null ? sql`${foods.brand} IS NULL` : eq(foods.brand, brand)))
+      .get();
 
-  if (existing) {
+    const state =
+      input.state === undefined || input.state === null || input.state === ""
+        ? existing?.state ?? "raw"
+        : enumField(input.state, "state", FOOD_STATES)!;
+    const yieldFactor =
+      input.yieldFactor === undefined || input.yieldFactor === null || input.yieldFactor === ""
+        ? existing?.yieldFactor ?? 1
+        : numField(input.yieldFactor, "yieldFactor", { required: true, min: 0.01, max: 10 })!;
+    const measuresJson = measuresJsonFromInput(input, existing);
+
+    if (existing) {
+      const row = db
+        .update(foods)
+        .set({
+          servingGrams,
+          kcalPer100g: m.kcal,
+          proteinPer100g: m.proteinG,
+          carbsPer100g: m.carbsG,
+          fatPer100g: m.fatG,
+          fibrePer100g: m.fibreG,
+          sodiumPer100g: m.sodiumMg,
+          state,
+          yieldFactor,
+          measuresJson,
+          barcode: input.barcode === undefined ? existing.barcode : str(input.barcode, "barcode", { max: 64 }),
+          extraJson: input.extra === undefined ? existing.extraJson : JSON.stringify(input.extra),
+          source: typeof input.source === "string" ? input.source : existing.source,
+          sourceUrl:
+            input.sourceUrl === undefined ? existing.sourceUrl : str(input.sourceUrl, "sourceUrl", { max: 500 }),
+          sourceDate: sourceDateField(input.sourceDate, existing.sourceDate),
+          updatedAtMs: now,
+        })
+        .where(eq(foods.id, existing.id))
+        .returning()
+        .get()!;
+      recordFoodRevision(existing, row, now);
+      return foodWithMeasures(row);
+    }
+
     const row = db
-      .update(foods)
-      .set({
+      .insert(foods)
+      .values({
+        name,
+        brand,
+        barcode: str(input.barcode, "barcode", { max: 64 }),
         servingGrams,
         kcalPer100g: m.kcal,
         proteinPer100g: m.proteinG,
@@ -410,47 +491,17 @@ export function addFood(input: Record<string, unknown>): FoodWithMeasures {
         state,
         yieldFactor,
         measuresJson,
-        barcode: input.barcode === undefined ? existing.barcode : str(input.barcode, "barcode", { max: 64 }),
-        extraJson: input.extra === undefined ? existing.extraJson : JSON.stringify(input.extra),
-        source: typeof input.source === "string" ? input.source : existing.source,
-        sourceUrl:
-          input.sourceUrl === undefined ? existing.sourceUrl : str(input.sourceUrl, "sourceUrl", { max: 500 }),
-        sourceDate: sourceDateField(input.sourceDate, existing.sourceDate),
+        extraJson: input.extra === undefined ? null : JSON.stringify(input.extra),
+        source: typeof input.source === "string" ? input.source : "manual",
+        sourceUrl: str(input.sourceUrl, "sourceUrl", { max: 500 }),
+        sourceDate: sourceDateField(input.sourceDate),
+        createdAtMs: now,
         updatedAtMs: now,
       })
-      .where(eq(foods.id, existing.id))
       .returning()
       .get()!;
-    recordFoodRevision(existing, row, now);
     return foodWithMeasures(row);
-  }
-
-  const row = db
-    .insert(foods)
-    .values({
-      name,
-      brand,
-      barcode: str(input.barcode, "barcode", { max: 64 }),
-      servingGrams,
-      kcalPer100g: m.kcal,
-      proteinPer100g: m.proteinG,
-      carbsPer100g: m.carbsG,
-      fatPer100g: m.fatG,
-      fibrePer100g: m.fibreG,
-      sodiumPer100g: m.sodiumMg,
-      state,
-      yieldFactor,
-      measuresJson,
-      extraJson: input.extra === undefined ? null : JSON.stringify(input.extra),
-      source: typeof input.source === "string" ? input.source : "manual",
-      sourceUrl: str(input.sourceUrl, "sourceUrl", { max: 500 }),
-      sourceDate: sourceDateField(input.sourceDate),
-      createdAtMs: now,
-      updatedAtMs: now,
-    })
-    .returning()
-    .get()!;
-  return foodWithMeasures(row);
+  })();
 }
 
 /**
@@ -463,68 +514,70 @@ export function addFood(input: Record<string, unknown>): FoodWithMeasures {
  */
 export function updateFood(id: unknown, input: Record<string, unknown>): FoodWithMeasures {
   const foodId = idField(id);
-  const existing = getFood(foodId);
   const now = Date.now();
 
-  const name = "name" in input ? str(input.name, "name", { required: true, max: 200 })! : existing.name;
-  const brand = "brand" in input ? str(input.brand, "brand", { max: 200 }) : existing.brand;
-  const collision = db
-    .select({ id: foods.id })
-    .from(foods)
-    .where(
-      and(
-        eq(foods.name, name),
-        brand === null ? sql`${foods.brand} IS NULL` : eq(foods.brand, brand),
-        sql`${foods.id} <> ${foodId}`,
-      ),
-    )
-    .get();
-  if (collision) {
-    fail("another food already uses that name and brand; choose a different name or brand", 409);
-  }
+  return sqlite.transaction(() => {
+    const existing = getFood(foodId);
+    const name = "name" in input ? str(input.name, "name", { required: true, max: 200 })! : existing.name;
+    const brand = "brand" in input ? str(input.brand, "brand", { max: 200 }) : existing.brand;
+    const collision = db
+      .select({ id: foods.id })
+      .from(foods)
+      .where(
+        and(
+          eq(foods.name, name),
+          brand === null ? sql`${foods.brand} IS NULL` : eq(foods.brand, brand),
+          sql`${foods.id} <> ${foodId}`,
+        ),
+      )
+      .get();
+    if (collision) {
+      fail("another food already uses that name and brand; choose a different name or brand", 409);
+    }
 
-  const macros = providedPer100Macros(input);
-  const servingGrams =
-    "servingGrams" in input
-      ? numField(input.servingGrams, "servingGrams", { required: true, min: 1, max: 10_000 })!
-      : existing.servingGrams;
-  const state =
-    input.state === undefined || input.state === null || input.state === ""
-      ? existing.state
-      : enumField(input.state, "state", FOOD_STATES)!;
-  const yieldFactor =
-    input.yieldFactor === undefined || input.yieldFactor === null || input.yieldFactor === ""
-      ? existing.yieldFactor
-      : numField(input.yieldFactor, "yieldFactor", { required: true, min: 0.01, max: 10 })!;
+    const macros = providedPer100Macros(input);
+    const servingGrams =
+      "servingGrams" in input
+        ? numField(input.servingGrams, "servingGrams", { required: true, min: 1, max: 10_000 })!
+        : existing.servingGrams;
+    const state =
+      input.state === undefined || input.state === null || input.state === ""
+        ? existing.state
+        : enumField(input.state, "state", FOOD_STATES)!;
+    const yieldFactor =
+      input.yieldFactor === undefined || input.yieldFactor === null || input.yieldFactor === ""
+        ? existing.yieldFactor
+        : numField(input.yieldFactor, "yieldFactor", { required: true, min: 0.01, max: 10 })!;
 
-  const row = db
-    .update(foods)
-    .set({
-      name,
-      brand,
-      barcode: input.barcode === undefined ? existing.barcode : str(input.barcode, "barcode", { max: 64 }),
-      servingGrams,
-      kcalPer100g: macros.kcal ?? existing.kcalPer100g,
-      proteinPer100g: macros.proteinG ?? existing.proteinPer100g,
-      carbsPer100g: macros.carbsG ?? existing.carbsPer100g,
-      fatPer100g: macros.fatG ?? existing.fatPer100g,
-      fibrePer100g: macros.fibreG ?? existing.fibrePer100g,
-      sodiumPer100g: macros.sodiumMg ?? existing.sodiumPer100g,
-      state,
-      yieldFactor,
-      measuresJson: measuresJsonFromInput(input, existing),
-      extraJson: input.extra === undefined ? existing.extraJson : JSON.stringify(input.extra),
-      source: typeof input.source === "string" ? input.source : existing.source,
-      sourceUrl:
-        input.sourceUrl === undefined ? existing.sourceUrl : str(input.sourceUrl, "sourceUrl", { max: 500 }),
-      sourceDate: sourceDateField(input.sourceDate, existing.sourceDate),
-      updatedAtMs: now,
-    })
-    .where(eq(foods.id, foodId))
-    .returning()
-    .get()!;
-  recordFoodRevision(existing, row, now);
-  return foodWithMeasures(row);
+    const row = db
+      .update(foods)
+      .set({
+        name,
+        brand,
+        barcode: input.barcode === undefined ? existing.barcode : str(input.barcode, "barcode", { max: 64 }),
+        servingGrams,
+        kcalPer100g: macros.kcal ?? existing.kcalPer100g,
+        proteinPer100g: macros.proteinG ?? existing.proteinPer100g,
+        carbsPer100g: macros.carbsG ?? existing.carbsPer100g,
+        fatPer100g: macros.fatG ?? existing.fatPer100g,
+        fibrePer100g: macros.fibreG ?? existing.fibrePer100g,
+        sodiumPer100g: macros.sodiumMg ?? existing.sodiumPer100g,
+        state,
+        yieldFactor,
+        measuresJson: measuresJsonFromInput(input, existing),
+        extraJson: input.extra === undefined ? existing.extraJson : JSON.stringify(input.extra),
+        source: typeof input.source === "string" ? input.source : existing.source,
+        sourceUrl:
+          input.sourceUrl === undefined ? existing.sourceUrl : str(input.sourceUrl, "sourceUrl", { max: 500 }),
+        sourceDate: sourceDateField(input.sourceDate, existing.sourceDate),
+        updatedAtMs: now,
+      })
+      .where(eq(foods.id, foodId))
+      .returning()
+      .get()!;
+    recordFoodRevision(existing, row, now);
+    return foodWithMeasures(row);
+  })();
 }
 
 export type FoodRevision = typeof foodRevisions.$inferSelect;
@@ -545,20 +598,26 @@ export function getFoodRevisions(foodId: unknown): FoodRevision[] {
 
 export function deleteFood(id: unknown): { deleted: boolean } {
   const foodId = idField(id);
-  const used = sqlite.prepare("SELECT COUNT(*) AS c FROM food_log WHERE food_id = ?").get(foodId) as { c: number };
-  if (used.c > 0) fail("food is used by logged meals; it cannot be deleted", 409);
-  const loggedIngredient = sqlite
-    .prepare("SELECT COUNT(*) AS c FROM food_log_ingredients WHERE food_id = ?")
-    .get(foodId) as { c: number };
-  if (loggedIngredient.c > 0) {
-    fail("food is referenced by logged recipe ingredients; it cannot be deleted", 409);
-  }
-  const inRecipe = sqlite
-    .prepare("SELECT COUNT(*) AS c FROM recipe_ingredients WHERE food_id = ?")
-    .get(foodId) as { c: number };
-  if (inRecipe.c > 0) fail("food is used by a recipe; it cannot be deleted", 409);
-  const row = db.delete(foods).where(eq(foods.id, foodId)).returning().get();
-  return { deleted: Boolean(row) };
+  return sqlite.transaction(() => {
+    const whey = parseWheyLink(getProfile());
+    if (whey?.foodId === foodId) {
+      fail("food is linked to one-tap whey; unlink it on /supplements before deleting", 409);
+    }
+    const used = sqlite.prepare("SELECT COUNT(*) AS c FROM food_log WHERE food_id = ?").get(foodId) as { c: number };
+    if (used.c > 0) fail("food is used by logged meals; it cannot be deleted", 409);
+    const loggedIngredient = sqlite
+      .prepare("SELECT COUNT(*) AS c FROM food_log_ingredients WHERE food_id = ?")
+      .get(foodId) as { c: number };
+    if (loggedIngredient.c > 0) {
+      fail("food is referenced by logged recipe ingredients; it cannot be deleted", 409);
+    }
+    const inRecipe = sqlite
+      .prepare("SELECT COUNT(*) AS c FROM recipe_ingredients WHERE food_id = ?")
+      .get(foodId) as { c: number };
+    if (inRecipe.c > 0) fail("food is used by a recipe; it cannot be deleted", 409);
+    const row = db.delete(foods).where(eq(foods.id, foodId)).returning().get();
+    return { deleted: Boolean(row) };
+  })();
 }
 
 /**
@@ -607,41 +666,7 @@ export function applyFoodTemplate(
  * the process runs. An explicit offset (`+08:00`, `Z`) and epoch milliseconds are taken as-is.
  */
 function instantField(value: unknown, name: string): number {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || value <= 0) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
-    return Math.trunc(value);
-  }
-  if (typeof value !== "string" || value.trim() === "") {
-    fail(`${name} must be an ISO timestamp or epoch milliseconds`);
-  }
-
-  const text = value.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    fail(`${name} must include a time (ISO timestamp or epoch milliseconds), not just a date`);
-  }
-
-  // Explicit offset/UTC: Date.parse is unambiguous, so keep the previous behaviour.
-  if (/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(text)) {
-    const ms = Date.parse(text);
-    if (Number.isNaN(ms)) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
-    return ms;
-  }
-
-  // Naive ISO wall-clock: resolve it in the profile timezone.
-  const naive = text.match(
-    /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?$/,
-  );
-  if (!naive) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
-  const [, year, month, dayText, hourText, minuteText, secondText, fraction] = naive;
-  const day = `${year}-${month}-${dayText}`;
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText ?? "0");
-  if (!isDay(day) || hour > 23 || minute > 59 || second > 59) {
-    fail(`${name} must be a valid local date and time`);
-  }
-  const millis = fraction ? Number(fraction.padEnd(3, "0").slice(0, 3)) : 0;
-  return localTimeMs(day, `${hourText}:${minuteText}:${String(second).padStart(2, "0")}`, getTimezone()) + millis;
+  return parseInstantField(value, name, getTimezone());
 }
 
 /** The provenance a legacy `estimated`-only row implies. New rows always store a source. */
@@ -930,38 +955,12 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
   const entryDay = day ?? dayOfEatenAt ?? today;
   const meal = enumField(input.meal, "meal", MEALS)!;
 
-  const used = new Set(
-    db
-      .select({ servingNo: foodLog.servingNo })
-      .from(foodLog)
-      .where(eq(foodLog.recipeId, recipeId))
-      .all()
-      .map((row) => row.servingNo)
-      .filter((value): value is number => typeof value === "number"),
-  );
   const requested =
     input.servingNo === undefined || input.servingNo === null || input.servingNo === ""
       ? null
       : numField(input.servingNo, "servingNo", { required: true, integer: true, min: 1, max: 1000 })!;
-  if (requested !== null) {
-    if (requested > recipe.servingsTotal) {
-      fail(`servingNo must be between 1 and ${recipe.servingsTotal} for "${recipe.name}"`);
-    }
-    if (used.has(requested)) {
-      fail(`serving ${requested} of "${recipe.name}" is already logged`, 409);
-    }
-  }
-  let servingNo = requested;
-  if (servingNo === null) {
-    for (let n = 1; n <= recipe.servingsTotal; n += 1) {
-      if (!used.has(n)) {
-        servingNo = n;
-        break;
-      }
-    }
-    if (servingNo === null) {
-      fail(`all ${recipe.servingsTotal} servings of "${recipe.name}" are already logged`);
-    }
+  if (requested !== null && requested > recipe.servingsTotal) {
+    fail(`servingNo must be between 1 and ${recipe.servingsTotal} for "${recipe.name}"`);
   }
 
   const fraction = servingFractionField(input.servingFraction);
@@ -989,7 +988,32 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
   const totalMacros = computation.totalMacros;
   const perServingSnapshot = computation.perServing;
 
-  const entry = sqlite.transaction(() => {
+  const { entry, servingNo } = sqlite.transaction(() => {
+    const used = new Set(
+      db
+        .select({ servingNo: foodLog.servingNo })
+        .from(foodLog)
+        .where(eq(foodLog.recipeId, recipeId))
+        .all()
+        .map((row) => row.servingNo)
+        .filter((value): value is number => typeof value === "number"),
+    );
+    let chosenServingNo = requested;
+    if (chosenServingNo !== null) {
+      if (used.has(chosenServingNo)) {
+        fail(`serving ${chosenServingNo} of "${recipe.name}" is already logged`, 409);
+      }
+    } else {
+      for (let n = 1; n <= recipe.servingsTotal; n += 1) {
+        if (!used.has(n)) {
+          chosenServingNo = n;
+          break;
+        }
+      }
+      if (chosenServingNo === null) {
+        fail(`all ${recipe.servingsTotal} servings of "${recipe.name}" are already logged`);
+      }
+    }
     const row = insertEntry({
       day: entryDay,
       meal,
@@ -1012,7 +1036,7 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
       basisState: null,
       basisYieldFactor: null,
       recipeId,
-      servingNo,
+      servingNo: chosenServingNo,
       servingFraction: fraction,
       recipeServingJson: JSON.stringify(perServingSnapshot),
       note: str(input.note, "note", { max: 1000 }),
@@ -1020,7 +1044,7 @@ export function logRecipe(input: Record<string, unknown>): RecipeLogResult {
       updatedAtMs: now,
     });
     insertIngredientSnapshots(row.id, snapshots, now);
-    return row;
+    return { entry: row, servingNo: chosenServingNo };
   })();
 
   return {
@@ -1469,7 +1493,8 @@ export function nutritionRange(days = 7, endDay?: string): NutritionDayTotals[] 
        FROM food_log WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day`,
     )
     .all(start, end) as (Macros & { day: string; entries: number })[];
-  return rows.map((r) => ({ ...r, targetKcal: resolveTargets(r.day).kcal }));
+  const resolveTarget = createTargetResolver();
+  return rows.map((r) => ({ ...r, targetKcal: resolveTarget(r.day).kcal }));
 }
 
 /** Recent distinct foods eaten, for the quick-add list. */
@@ -1484,13 +1509,25 @@ export function recentFoods(limit = 12): { name: string; foodId: number | null; 
     .all(capped) as { name: string; foodId: number | null; grams: number; kcal: number }[];
 }
 
-/** Duplicate a day's entries onto `toDay`; existing rows are left alone. */
-export function copyDay(fromDay: string, toDay: string): { copied: number; toDay: string } {
+/** Duplicate a day's (or single meal's) entries onto `toDay`; existing rows are left alone. */
+export function copyDay(
+  fromDay: string,
+  toDay: string,
+  options: { meal?: Meal | null } = {},
+): { copied: number; toDay: string } {
   if (!isDay(fromDay) || !isDay(toDay)) fail("fromDay and toDay must be YYYY-MM-DD");
   if (fromDay === toDay) fail("fromDay and toDay must differ");
   const tz = getTimezone();
-  const source = db.select().from(foodLog).where(eq(foodLog.day, fromDay)).orderBy(foodLog.eatenAtMs).all();
-  if (source.length === 0) fail(`no food logged on ${fromDay}`, 404);
+  const mealFilter = options.meal ? enumField(options.meal, "meal", MEALS)! : null;
+  const source = db
+    .select()
+    .from(foodLog)
+    .where(mealFilter ? and(eq(foodLog.day, fromDay), eq(foodLog.meal, mealFilter)) : eq(foodLog.day, fromDay))
+    .orderBy(foodLog.eatenAtMs)
+    .all();
+  if (source.length === 0) {
+    fail(mealFilter ? `no ${mealFilter} logged on ${fromDay}` : `no food logged on ${fromDay}`, 404);
+  }
 
   const now = Date.now();
   const insertAll = sqlite.transaction(() => {

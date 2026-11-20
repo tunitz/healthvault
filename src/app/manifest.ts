@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Health Vault",
-    short_name: "Health Vault",
+    name: "HealthVault",
+    short_name: "HealthVault",
     description: "Apple Health export explorer",
     start_url: "/",
     display: "standalone",

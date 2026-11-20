@@ -8,11 +8,23 @@ import { formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
 import type { HealthContext } from "@/lib/services/context";
 import type { WidgetPreference } from "@/lib/services/settings";
 import { cn } from "@/lib/utils";
-import { orderedVisibleWidgets, SIZE_SPAN } from "./registry";
+import { orderedVisibleWidgets, SIZE_SPAN, WIDGET_META, type WidgetId } from "./registry";
 import { supplementHint } from "./data";
 import type { DashboardData } from "./widget-data";
 import { WidgetView } from "./widget-view";
 import { WidgetMenu } from "./widget-menu";
+
+const WIDGET_HREF: Record<WidgetId, string> = {
+  nutrition: "/nutrition",
+  activity: "/training",
+  supplements: "/supplements",
+  measurements: "/measurements",
+  sleep: "/training",
+  weight: "/measurements",
+  workouts: "/workouts",
+  training: "/training",
+  imports: "/uploads",
+};
 
 function TodayCard({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
@@ -85,7 +97,13 @@ export function Dashboard({
           <TodayCard
             label="Weight"
             value={formatWeight(context.weight.latest?.value, units)}
-            hint={context.weight.change7dKg !== null ? `${formatWeightDelta(context.weight.change7dKg, units)} / 7d` : "not logged"}
+            hint={
+              context.weight.change7dKg !== null
+                ? `${formatWeightDelta(context.weight.change7dKg, units)} / 7d`
+                : context.weight.latest
+                  ? `${context.weight.latest.source === "apple" ? "Apple" : "Manual"} · ${context.weight.latest.day}`
+                  : "Not logged"
+            }
           />
           <TodayCard
             label="Supplements"
@@ -127,13 +145,21 @@ export function Dashboard({
               )}
             >
               <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border pb-2">
-                <h2 className="text-sm font-medium capitalize">{id}</h2>
+                <h2 className="text-sm font-medium">
+                  <Link
+                    href={WIDGET_HREF[id]}
+                    className="rounded-sm underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {WIDGET_META[id].title}
+                  </Link>
+                </h2>
                 <WidgetMenu
                   id={id}
                   index={index}
                   total={ordered.length}
                   range={pref.range}
                   display={pref.display}
+                  size={pref.size}
                 />
               </header>
               <div className="min-w-0 flex-1">

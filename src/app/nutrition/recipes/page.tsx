@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Plus, Pencil } from "lucide-react";
-import { listRecipes, recipeTotals } from "@/lib/services/recipes";
+import { listRecipes, recipeTotalsBatch } from "@/lib/services/recipes";
 import { getTimezone } from "@/lib/services/profile";
 import { instant, num, plural } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -44,18 +44,24 @@ export default async function RecipesPage(props: {
   const recipeOutcome =
     params.recipe === "deleted" || params.recipe === "archived" ? params.recipe : null;
 
-  // The bounded list returns the total, so a stale page can be clamped before fetching rows.
-  const count = listRecipes({ query, includeArchived, limit: 1 }).total;
-  const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE));
-  const page = Number.isFinite(requested)
-    ? Math.min(Math.max(1, Math.trunc(requested)), totalPages)
-    : 1;
-  const result = listRecipes({
+  const requestedPage = Number.isFinite(requested) ? Math.max(1, Math.trunc(requested)) : 1;
+  let result = listRecipes({
     query,
     includeArchived,
     limit: PAGE_SIZE,
-    offset: (page - 1) * PAGE_SIZE,
+    offset: (requestedPage - 1) * PAGE_SIZE,
   });
+  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  const page = Math.min(requestedPage, totalPages);
+  if (page !== requestedPage) {
+    result = listRecipes({
+      query,
+      includeArchived,
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+    });
+  }
+  const totalsByRecipe = recipeTotalsBatch(result.items);
   const timezone = getTimezone();
 
   return (
@@ -111,6 +117,11 @@ export default async function RecipesPage(props: {
             maxLength={120}
             className="h-11 flex-1 sm:h-8 sm:w-56 sm:flex-none"
           />
+          {query ? (
+            <Button asChild variant="ghost" size="icon-sm" className="max-sm:size-11" aria-label="Clear search" title="Clear search">
+              <Link href={listHref("", 1, includeArchived)}>×</Link>
+            </Button>
+          ) : null}
           <Button type="submit" variant="outline" size="sm">
             Search
           </Button>
@@ -140,15 +151,8 @@ export default async function RecipesPage(props: {
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {result.items.map((item) => {
-            // A concurrent delete must not take the list down; show the row without totals.
-            let totals: ReturnType<typeof recipeTotals> | null = null;
-            try {
-              totals = recipeTotals(item.id);
-            } catch {
-              totals = null;
-            }
-            const resolvedCount =
-              totals?.ingredients.filter((ingredient) => ingredient.resolved).length ?? 0;
+            const totals = totalsByRecipe.get(item.id) ?? null;
+            const resolvedCount = totals?.resolvedCount ?? 0;
             const partial = !item.complete && resolvedCount > 0;
             return (
               <li key={item.id} className="min-w-0">

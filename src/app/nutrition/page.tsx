@@ -2,17 +2,18 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { addDays, dayHeading, formatClockSeconds, isDay, lastDays, localTimeMs } from "@/lib/day";
+import { sqlite } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { getTimezone } from "@/lib/services/profile";
 import { currentDay } from "@/lib/services/context";
 import {
+  createTargetResolver,
   dayNutrition,
   nutritionRange,
   logMeal,
   logRecipe,
   previewEntry,
   recentFoods,
-  resolveTargets,
   searchFoods,
   type Targets,
 } from "@/lib/services/nutrition";
@@ -177,23 +178,25 @@ async function saveMealDraftAction(input: DraftSaveInput): Promise<SaveDraftResu
       }
     }
 
-    if (input.entries.length > 0) {
-      logMeal({
-        day: input.day,
-        meal: input.meal,
-        ...(eatenAt === undefined ? {} : { eatenAt }),
-        entries: input.entries,
-      });
-    }
-    for (const recipe of input.recipes) {
-      logRecipe({
-        recipeId: recipe.recipeId,
-        day: input.day,
-        meal: input.meal,
-        servingFraction: recipe.servingFraction || "1",
-        ...(eatenAt === undefined ? {} : { eatenAt }),
-      });
-    }
+    sqlite.transaction(() => {
+      if (input.entries.length > 0) {
+        logMeal({
+          day: input.day,
+          meal: input.meal,
+          ...(eatenAt === undefined ? {} : { eatenAt }),
+          entries: input.entries,
+        });
+      }
+      for (const recipe of input.recipes) {
+        logRecipe({
+          recipeId: recipe.recipeId,
+          day: input.day,
+          meal: input.meal,
+          servingFraction: recipe.servingFraction || "1",
+          ...(eatenAt === undefined ? {} : { eatenAt }),
+        });
+      }
+    })();
 
     revalidatePath("/nutrition");
     revalidatePath("/");
@@ -290,6 +293,10 @@ function MacroSummary({ data }: { data: ReturnType<typeof dayNutrition> }) {
         <MacroBar label="Protein" value={data.totals.proteinG} target={data.targets.proteinG} unit="g" color="var(--chart-1)" />
         <MacroBar label="Carbs" value={data.totals.carbsG} target={data.targets.carbsG} unit="g" color="var(--chart-2)" />
         <MacroBar label="Fat" value={data.totals.fatG} target={data.targets.fatG} unit="g" color="var(--chart-4)" />
+        <div className="grid gap-3 pt-1 sm:grid-cols-2">
+          <MacroBar label="Fibre" value={data.totals.fibreG} target={data.targets.fibreG} unit="g" color="var(--chart-3)" />
+          <MacroBar label="Sodium" value={data.totals.sodiumMg} target={data.targets.sodiumMg} unit="mg" color="var(--chart-5)" />
+        </div>
         {data.estimatedEntries > 0 ? (
           <p className="text-xs text-muted-foreground">
             {data.estimatedEntries} {data.estimatedEntries === 1 ? "entry is" : "entries are"} estimated.
@@ -329,9 +336,10 @@ export default async function NutritionPage(props: {
   const previousDay = addDays(day, -1);
 
   const rangeRows = new Map(nutritionRange(range, day).map((row) => [row.day, row]));
+  const resolveTarget = createTargetResolver();
   const trend = lastDays(range, day).map((value) => {
     const row = rangeRows.get(value);
-    return row ?? { day: value, kcal: 0, targetKcal: resolveTargets(value).kcal };
+    return row ?? { day: value, kcal: 0, targetKcal: resolveTarget(value).kcal };
   });
 
   return (

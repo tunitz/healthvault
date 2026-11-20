@@ -288,3 +288,79 @@ export function strengthContext(): StrengthContext {
     .get(start, end) as { sessions: number };
   return { sessionsThisWeek: row.sessions, recentExercises: recentExercises(10) };
 }
+
+/** Epley estimated 1RM for a set with both load and reps (1–20 reps). */
+export function estimated1RmKg(loadKg: number | null, reps: number | null): number | null {
+  if (loadKg === null || reps === null || loadKg <= 0 || reps <= 0) return null;
+  if (reps === 1) return loadKg;
+  return loadKg * (1 + reps / 30);
+}
+
+/** Update an existing strength set; at least one of reps or loadKg must remain set. */
+export function updateStrengthSet(id: unknown, input: Record<string, unknown>): StrengthSet {
+  const setId = idField(id, "id");
+  const existing = db.select().from(strengthSets).where(eq(strengthSets.id, setId)).get();
+  if (!existing) fail("strength set not found", 404);
+
+  const day =
+    "day" in input && !blank(input.day)
+      ? dayField(input.day, "day")
+      : existing.day;
+  const exercise =
+    "exercise" in input && !blank(input.exercise)
+      ? str(input.exercise, "exercise", { required: true, max: 120 })!
+      : existing.exercise;
+  const reps =
+    "reps" in input
+      ? blank(input.reps)
+        ? null
+        : numField(input.reps, "reps", { min: 0, max: 1000 })
+      : existing.reps;
+  const loadKg =
+    "loadKg" in input
+      ? blank(input.loadKg)
+        ? null
+        : numField(input.loadKg, "loadKg", { min: 0, max: 1000 })
+      : existing.loadKg;
+  if (reps === null && loadKg === null) fail("a strength set needs reps or loadKg");
+
+  const note = "note" in input ? str(input.note, "note", { max: 1000 }) : existing.note;
+
+  let workoutId = existing.workoutId;
+  if ("workoutId" in input) {
+    if (blank(input.workoutId)) {
+      workoutId = null;
+    } else {
+      const linkedId = idField(input.workoutId, "workoutId");
+      const workout = db
+        .select({ id: workouts.id, day: workouts.day })
+        .from(workouts)
+        .where(eq(workouts.id, linkedId))
+        .get();
+      if (!workout) fail("workoutId does not match an imported workout", 404);
+      if (workout.day !== day) fail("Linked workout must be on the set's day", 400);
+      workoutId = linkedId;
+    }
+  } else if (workoutId !== null && day !== existing.day) {
+    const workout = db
+      .select({ day: workouts.day })
+      .from(workouts)
+      .where(eq(workouts.id, workoutId))
+      .get();
+    if (!workout || workout.day !== day) workoutId = null;
+  }
+
+  return db
+    .update(strengthSets)
+    .set({ day, exercise, reps, loadKg, note, workoutId })
+    .where(eq(strengthSets.id, setId))
+    .returning()
+    .get()!;
+}
+
+/** Delete a single strength set by id. */
+export function deleteStrengthSet(id: unknown): { deleted: boolean } {
+  const setId = idField(id, "id");
+  const deleted = db.delete(strengthSets).where(eq(strengthSets.id, setId)).returning().get();
+  return { deleted: Boolean(deleted) };
+}

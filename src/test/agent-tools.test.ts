@@ -2005,6 +2005,46 @@ describe("explicit past-meal history refresh", () => {
     expect(after.estimated).toBe(1);
   });
 
+  test("refresh preserves ingredient snapshot provenance (source, sourceUrl, sourceDate)", () => {
+    const food = nutrition.addFood({
+      name: "Ingredient provenance food",
+      per100g: { kcal: 100, proteinG: 10, carbsG: 10, fatG: 2, fibreG: 1, sodiumMg: 50 },
+      source: "label",
+      sourceUrl: "https://example.com/old-label",
+      sourceDate: "2026-01-15",
+    });
+    const recipe = recipes.createRecipe({
+      name: "Provenance stew",
+      servings: 1,
+      ingredients: [{ foodId: food.id, grams: 100 }],
+    });
+    const logged = nutrition.logRecipe({ recipeId: recipe.id, day: "2026-12-14", meal: "dinner" });
+    expect(logged.ingredients[0].source).toBe("label");
+    expect(logged.ingredients[0].sourceUrl).toBe("https://example.com/old-label");
+    expect(logged.ingredients[0].sourceDate).toBe("2026-01-15");
+
+    nutrition.addFood({
+      name: "Ingredient provenance food",
+      per100g: { kcal: 150, proteinG: 12, carbsG: 10, fatG: 2, fibreG: 1, sodiumMg: 50 },
+      source: "usda",
+      sourceUrl: "https://example.com/new-usda",
+      sourceDate: "2026-06-01",
+    });
+    const preview = history.previewHistoryRefresh({ foodIds: [food.id] });
+    expect(preview.changed).toBe(1);
+    const applied = history.applyHistoryRefresh({
+      foodIds: [food.id],
+      previewHash: preview.previewHash,
+    });
+    expect(applied.applied).toBe(1);
+
+    const after = nutrition.getEntry(logged.entry.id);
+    near(after.kcal, 150, 0.001);
+    expect(after.ingredients[0].source).toBe("label");
+    expect(after.ingredients[0].sourceUrl).toBe("https://example.com/old-label");
+    expect(after.ingredients[0].sourceDate).toBe("2026-01-15");
+  });
+
   test("an oversized bulk scope is rejected before any partial write", () => {
     const food = nutrition.addFood({ name: "Bulk refresh food", per100g: { kcal: 1 } });
     const insert = sqlite.prepare(
@@ -2168,8 +2208,23 @@ describe("agent surface", () => {
       "food_history_preview",
       "food_history_refresh",
       "recipe_list",
+      "training_block_get",
+      "training_block_start",
+      "training_session_status",
+      "strength_log",
+      "strength_history",
+      "strength_progression",
+      "strength_delete",
+      "whey_log",
+      "whey_undo",
+      "food_update",
+      "weekly_summary",
+      "five_k_progress",
+      "sleep_stages",
+      "supplement_adherence",
+      "recipe_preview",
     ] as never);
-    expect(agentTools.AGENT_TOOLS.length).toBe(38);
+    expect(agentTools.AGENT_TOOLS.length).toBe(53);
   });
 
   test("recipe_list is bounded and excludes archived recipes by default", async () => {

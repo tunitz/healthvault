@@ -3,6 +3,7 @@
 import { archiveSupplementAction, saveSupplementAction, toggleSupplementAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { num } from "@/lib/format";
 import type { ChecklistItem, Supplement } from "@/lib/services/supplements";
@@ -34,7 +35,7 @@ export function SupplementChecklist({ day, items }: { day: string; items: Checkl
             <SubmitButton
               variant={logged ? "secondary" : "outline"}
               size="icon"
-              pendingLabel=""
+              pendingLabel={<Spinner className="size-3.5" />}
               aria-label={logged ? `Mark ${supplement.name} untaken` : `Mark ${supplement.name} taken`}
               className={cn("size-9 shrink-0 rounded-full max-sm:size-11", logged && "border-primary/40 text-primary")}
             >
@@ -83,7 +84,7 @@ function SupplementForm({ item }: { item?: Item }) {
         <Field label="Time">
           <Input name="time" type="time" defaultValue={schedule?.time ?? ""} />
         </Field>
-        <Field label="Active" hint="Uncheck to archive">
+        <Field label="Active" hint="Switch to Archived to hide without deleting history">
           <select name="active" defaultValue={item ? (item.supplement.active ? "1" : "0") : "1"} className={SELECT}>
             <option value="1">Active</option>
             <option value="0">Archived</option>
@@ -148,7 +149,17 @@ export function SupplementEditor({ items }: { items: Item[] }) {
           ) : null}
           <SupplementForm item={item} />
           <div className="border-t border-border px-4 py-3">
-            <ActionForm action={archiveSupplementAction} className="flex items-center justify-between gap-3">
+            <ActionForm
+              action={archiveSupplementAction}
+              confirm={
+                item.supplement.active
+                  ? `Archive "${item.supplement.name}"? Past intake history is kept, and it will stop appearing on today's checklist.`
+                  : `Remove "${item.supplement.name}"? If it has intake history it stays archived; otherwise it is deleted.`
+              }
+              confirmTitle={item.supplement.active ? `Archive ${item.supplement.name}?` : `Remove ${item.supplement.name}?`}
+              confirmLabel={item.supplement.active ? "Archive" : "Continue"}
+              className="flex items-center justify-between gap-3"
+            >
               <input type="hidden" name="id" value={item.supplement.id} />
               <p className="text-xs text-muted-foreground">
                 {item.supplement.active ? "Archiving keeps past intake." : "Already archived."}
