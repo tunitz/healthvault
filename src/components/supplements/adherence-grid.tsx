@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
+import { toggleSupplementAction } from "@/app/actions";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { AdherenceWeek, SupplementAdherence } from "@/lib/services/supplements";
@@ -22,7 +24,18 @@ function weekPercent(week: AdherenceWeek, isCurrent: boolean): { value: number; 
     : { value: week.pct, taken: week.takenDays, scheduled: week.scheduledDays };
 }
 
-function DayDot({ day, label }: { day: AdherenceWeek["days"][number]; label: string }) {
+function DayDot({
+  supplementId,
+  supplementName,
+  day,
+  label,
+}: {
+  supplementId: number;
+  supplementName: string;
+  day: AdherenceWeek["days"][number];
+  label: string;
+}) {
+  const [pending, startTransition] = useTransition();
   const state = !day.scheduled
     ? "unscheduled"
     : day.taken
@@ -30,16 +43,43 @@ function DayDot({ day, label }: { day: AdherenceWeek["days"][number]; label: str
       : day.future
         ? "future"
         : "missed";
+
+  if (day.future) {
+    return (
+      <span
+        role="img"
+        aria-label={label}
+        title={label}
+        className="block size-6 rounded-full border border-muted-foreground/25"
+      />
+    );
+  }
+
+  function handleToggle() {
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("supplementId", String(supplementId));
+      fd.set("day", day.day);
+      fd.set("taken", day.taken ? "0" : "1");
+      const res = await toggleSupplementAction({ ok: true }, fd);
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not update intake");
+      }
+    });
+  }
+
   return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
+    <button
+      type="button"
+      disabled={pending}
+      onClick={handleToggle}
+      aria-pressed={day.taken}
+      aria-label={`${supplementName} ${label} — click to toggle`}
+      title={`${label} (click to toggle)`}
       className={cn(
-        "block size-6 rounded-full border",
+        "flex size-7 items-center justify-center rounded-full border transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50",
         state === "taken" && "border-primary bg-primary",
         state === "missed" && "border-destructive/50 bg-destructive/10",
-        state === "future" && "border-muted-foreground/25",
         state === "unscheduled" && "border-dashed border-border bg-transparent",
       )}
     />
@@ -58,7 +98,7 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Sunday-start weeks. Scheduled days come from each regimen.
+          Sunday-start weeks. Click any past or current day dot to toggle intake.
         </p>
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground">
           <input
@@ -123,6 +163,8 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
                         {WEEKDAYS[weekdayIndex(day.day)].slice(0, 2)}
                       </span>
                       <DayDot
+                        supplementId={item.supplementId}
+                        supplementName={item.name}
                         day={day}
                         label={`${weekdayShort(day.day)} ${day.day.slice(5)}: ${
                           !day.scheduled

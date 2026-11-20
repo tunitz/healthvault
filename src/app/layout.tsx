@@ -4,17 +4,18 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AppNav } from "@/components/app-nav";
 import { SwRegister } from "@/components/sw-register";
+import { getSettings } from "@/lib/services/settings";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: { default: "Health Vault", template: "%s · Health Vault" },
+  title: { default: "HealthVault", template: "%s · HealthVault" },
   description: "Apple Health export explorer",
   // Personal health data on a LAN-bound single-user app: never index it.
   robots: { index: false, follow: false },
-  appleWebApp: { capable: true, title: "Health Vault", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "HealthVault", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -28,6 +29,12 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
+  let initialAppearance = undefined;
+  try {
+    initialAppearance = getSettings().value.appearance;
+  } catch {
+    // Fallback when DB is not yet initialized (e.g. static error shells).
+  }
   return (
     <html
       lang="en"
@@ -41,7 +48,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         >
           Skip to content
         </a>
-        <ThemeProvider>
+        <ThemeProvider initialAppearance={initialAppearance}>
           {/* AppNav owns the header, grouped sidebar and mobile bar so the collapse state can
               drive the content width directly. On /login it renders children without chrome. */}
           <AppNav>

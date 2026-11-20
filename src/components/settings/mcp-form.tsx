@@ -39,10 +39,14 @@ function maskToken(token: string): string {
 }
 
 /** Settings → MCP. Real enable/LAN controls plus a masked, rotatable harness token. */
-export function McpForm() {
-  const [status, setStatus] = useState<Status | null>(null);
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [token, setToken] = useState<TokenState | null>(null);
+export function McpForm({
+  initialState,
+}: {
+  initialState?: { status: Status; snapshot: Snapshot; token: TokenState };
+} = {}) {
+  const [status, setStatus] = useState<Status | null>(initialState?.status ?? null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(initialState?.snapshot ?? null);
+  const [token, setToken] = useState<TokenState | null>(initialState?.token ?? null);
   const [error, setError] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -51,6 +55,7 @@ export function McpForm() {
   const [tokenPending, setTokenPending] = useState(false);
 
   useEffect(() => {
+    if (initialState) return;
     let active = true;
     loadState()
       .then((loaded) => {
@@ -66,7 +71,7 @@ export function McpForm() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialState]);
 
   async function reload() {
     const loaded = await loadState();

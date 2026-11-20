@@ -1,6 +1,7 @@
+import { Fragment, Suspense, type ReactNode } from "react";
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
 import Link from "next/link";
+import { SubviewNav } from "@/components/subviews/subview-header";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -9,7 +10,7 @@ import {
 import { FiveKGoalSection, TrainingBlockSection, type WorkoutOption } from "@/components/training/plan-sections";
 import { StrengthLogSection, type StrengthWorkoutOption } from "@/components/training/strength-log";
 import {
-  fiveKAttempts, fiveKBest, heartRateDaily, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta,
+  fiveKAttempts, heartRateDaily, pickBestFiveK, restingHeartRateDaily, sourceBreakdown, stepsDaily, trendDelta,
   vo2MaxDaily, weeklyTraining, workoutHistory, workoutTotals, workoutTrend, workoutsBetween,
 } from "@/db/queries";
 import { compact, duration, hrZone, num, plural, workoutLabel } from "@/lib/format";
@@ -110,7 +111,7 @@ export default async function TrainingPage(props: {
 
   const today = currentDay();
   const attempts = fiveKAttempts(365);
-  const bestAttempt = fiveKBest(365);
+  const bestAttempt = pickBestFiveK(attempts);
 
   // Strength detail: manual sets, grouped by day, never added to the imported workout totals.
   const strengthSessions = listStrengthSessions(14);
@@ -124,7 +125,9 @@ export default async function TrainingPage(props: {
     selectedExercise !== null && !strengthExercises.includes(selectedExercise)
       ? [selectedExercise, ...strengthExercises]
       : strengthExercises;
-  const progression = selectedExercise === null ? [] : exerciseProgression(selectedExercise, 8);
+  const rawWeeks = typeof params.weeks === "string" ? Number.parseInt(params.weeks, 10) : 8;
+  const progressionWeeks = rawWeeks === 16 || rawWeeks === 52 ? rawWeeks : 8;
+  const progression = selectedExercise === null ? [] : exerciseProgression(selectedExercise, progressionWeeks);
   const strengthWeek = strengthContext();
   const strengthWorkouts: StrengthWorkoutOption[] = workoutsBetween(addDays(today, -13), today).map((workout) => ({
     id: workout.id,
@@ -146,15 +149,22 @@ export default async function TrainingPage(props: {
     });
   }
 
+  const ACTIVITY_TABS = [
+    { href: "/training", label: "Overview" },
+    { href: "/training/plan", label: "Plan" },
+    { href: "/training/strength", label: "Strength" },
+    { href: "/workouts", label: "Workouts" },
+  ] as const;
+
   const header = (
-    <div className="flex flex-col gap-1">
-      <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
-      <p className="text-sm text-muted-foreground">
-        Steps, heart rate, pace and volume. One device per day — phone and watch are never added together.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        Apple data through {fresh.lastRecordDay ?? "—"} · workouts through {fresh.lastWorkoutDay ?? "—"}
-      </p>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Training</h1>
+        <p className="text-sm text-muted-foreground">
+          Steps, heart rate, pace and volume. One device per day — phone and watch are never added together.
+        </p>
+      </div>
+      <SubviewNav label="Activity sections" items={ACTIVITY_TABS} activeHref="/training" />
     </div>
   );
 
@@ -179,6 +189,7 @@ export default async function TrainingPage(props: {
       exercises={exerciseOptions}
       selectedExercise={selectedExercise}
       progression={progression}
+      progressionWeeks={progressionWeeks}
       workoutOptions={strengthWorkouts}
       sessionsThisWeek={strengthWeek.sessionsThisWeek}
       weekOffset={weekOffset}
@@ -203,7 +214,7 @@ export default async function TrainingPage(props: {
     );
   }
 
-  const weekly = weeklySummary(weekOffset);
+  const weekly = weeklySummary(weekOffset, fresh);
   const stepAvg = steps.length ? steps.reduce((a, d) => a + d.value, 0) / steps.length : 0;
   const restingLatest = resting.at(-1)?.value;
   const restingFirst = resting[0]?.value;
@@ -332,20 +343,22 @@ export default async function TrainingPage(props: {
         />
       </div>
 
-      <div id="steps" className="scroll-mt-20">
-        <StepsChart data={steps} />
-      </div>
+      <Suspense fallback={<div className="h-64 rounded-xl border border-border bg-muted/30" aria-busy="true" />}>
+        <div id="steps" className="scroll-mt-20">
+          <StepsChart data={steps} />
+        </div>
 
-      <div className="grid gap-10 lg:grid-cols-2">
-        <WeeklyVolumeChart data={weeklyVolume} units={units} />
-        <WorkoutHrChart data={runs} />
-        <PaceTrendChart data={runs} units={units} />
-        <FitnessTrendChart resting={resting} vo2={vo2} />
-      </div>
+        <div className="grid gap-10 lg:grid-cols-2">
+          <WeeklyVolumeChart data={weeklyVolume} units={units} />
+          <WorkoutHrChart data={runs} />
+          <PaceTrendChart data={runs} units={units} />
+          <FitnessTrendChart resting={resting} vo2={vo2} />
+        </div>
 
-      <div id="heart-rate" className="scroll-mt-20">
-        <HeartRateDailyChart data={hr} />
-      </div>
+        <div id="heart-rate" className="scroll-mt-20">
+          <HeartRateDailyChart data={hr} />
+        </div>
+      </Suspense>
 
       <section id="recent-workouts" className="flex scroll-mt-20 flex-col gap-3">
         <div className="flex flex-col gap-0.5">
@@ -371,35 +384,55 @@ export default async function TrainingPage(props: {
             {recent.map((w, i) => {
               const zone = hrZone(w.avgHr);
               return (
-                <TableRow key={`${w.startDate}-${i}`}>
-                  <TableCell className="num"><span className="md:hidden">{w.day.slice(5)}</span><span className="hidden md:inline">{w.day}</span></TableCell>
-                  <TableCell><span className="block max-w-[5.5rem] truncate sm:max-w-[7.5rem] md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
-                  <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
-                  <TableCell className="num text-right">
-                    {formatDistance(w.km, units, 2)}
-                  </TableCell>
-                  <TableCell className="num hidden text-right md:table-cell">
-                    {formatPace(w.paceMinPerKm, units)}
-                  </TableCell>
-                  <TableCell className="num hidden text-right md:table-cell">
-                    {w.avgHr === null ? (
-                      "—"
-                    ) : (
-                      <span className="inline-flex items-center justify-end gap-1.5">
-                        <span aria-hidden className={`size-2 shrink-0 rounded-full ${zone.dot}`} />
-                        <span>
-                          {num(w.avgHr, 0)} {zone.label}
+                <Fragment key={`${w.startDate}-${i}`}>
+                  <TableRow>
+                    <TableCell className="num"><span className="md:hidden">{w.day.slice(5)}</span><span className="hidden md:inline">{w.day}</span></TableCell>
+                    <TableCell><span className="block max-w-[5.5rem] truncate sm:max-w-[7.5rem] md:max-w-none">{workoutLabel(w.type)}</span></TableCell>
+                    <TableCell className="num text-right">{w.minutes === null ? "—" : `${num(w.minutes, 0)} min`}</TableCell>
+                    <TableCell className="num text-right">
+                      {formatDistance(w.km, units, 2)}
+                    </TableCell>
+                    <TableCell className="num hidden text-right md:table-cell">
+                      {formatPace(w.paceMinPerKm, units)}
+                    </TableCell>
+                    <TableCell className="num hidden text-right md:table-cell">
+                      {w.avgHr === null ? (
+                        "—"
+                      ) : (
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <span aria-hidden className={`size-2 shrink-0 rounded-full ${zone.dot}`} />
+                          <span>
+                            {num(w.avgHr, 0)} {zone.label}
+                          </span>
                         </span>
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className="num hidden text-right md:table-cell">
-                    {w.maxHr === null ? "—" : num(w.maxHr, 0)}
-                  </TableCell>
-                  <TableCell className="num hidden text-right md:table-cell">
-                    {w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}
-                  </TableCell>
-                </TableRow>
+                      )}
+                    </TableCell>
+                    <TableCell className="num hidden text-right md:table-cell">
+                      {w.maxHr === null ? "—" : num(w.maxHr, 0)}
+                    </TableCell>
+                    <TableCell className="num hidden text-right md:table-cell">
+                      {w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow className="md:hidden hover:bg-transparent">
+                    <TableCell colSpan={4} className="pt-0 pb-2">
+                      <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <div className="flex gap-1">
+                          <dt>Pace</dt>
+                          <dd className="num text-foreground">{formatPace(w.paceMinPerKm, units)}</dd>
+                        </div>
+                        <div className="flex gap-1">
+                          <dt>Avg HR</dt>
+                          <dd className="num text-foreground">{w.avgHr === null ? "—" : `${num(w.avgHr, 0)} ${zone.label}`}</dd>
+                        </div>
+                        <div className="flex gap-1">
+                          <dt>Energy</dt>
+                          <dd className="num text-foreground">{w.kcal === null ? "—" : `${num(w.kcal, 0)} kcal`}</dd>
+                        </div>
+                      </dl>
+                    </TableCell>
+                  </TableRow>
+                </Fragment>
               );
             })}
           </TableBody>

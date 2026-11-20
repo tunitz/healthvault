@@ -11,13 +11,14 @@ agent API, no cloud, one local database file.
 
 | Area | Route | Storage |
 |---|---|---|
-| Apple Health import (records, workouts, activity days) | `/`, `/training`, `/workouts`, `/explorer`, `/uploads` | `records`, `workouts`, `activity_summaries`, `uploads` |
+| Apple Health import (records, workouts, GPX routes, ECG strips, activity days) | `/`, `/training`, `/workouts`, `/workouts/[id]`, `/explorer`, `/uploads` | `records`, `workouts`, `workout_routes`, `ecg_recordings`, `activity_summaries`, `uploads` |
 | Personal profile (name, birth date, sex, height, timezone, units, work schedule, 5K goal, notes) | `/profile` | `profile` (singleton) |
-| Weight / body-fat / waist | `/profile` | `measurements` (manual) merged with Apple `BodyMass` |
-| Training block and strength detail (planned sessions, logged sets) | `/training` | `planned_sessions`, `strength_sets` |
-| Food, calories and macros | `/nutrition` | `foods`, `food_log`, `nutrition_targets` |
+| Weight / body-fat / waist | `/measurements`, `/profile` | `measurements` (manual) merged with Apple `BodyMass` |
+| Training block and strength detail (planned sessions, logged sets) | `/training`, `/training/plan`, `/training/strength` | `planned_sessions`, `strength_sets` |
+| Food, calories, macros and targets | `/nutrition`, `/nutrition/targets` | `foods`, `measures`, `food_log`, `nutrition_targets` |
 | Food library, recipes and past-meal corrections | `/nutrition/foods`, `/nutrition/recipes`, `/nutrition/corrections` | `foods`, `food_revisions`, `recipes`, `recipe_ingredients`, `food_log_ingredients`, `food_log_revisions` |
-| Supplements, adherence and one-tap whey | `/supplements` | `supplements`, `supplement_logs`, `profile.whey_link_json` |
+| Supplements, adherence and one-tap whey | `/supplements`, `/supplements/regimens`, `/supplements/history` | `supplements`, `supplement_logs`, `profile.whey_link_json` |
+| First-run setup, settings, MCP gating & data export/backup | `/setup`, `/settings/{appearance,dashboard,account,mcp,data-tools}` | `app_settings`, `auth_credentials` |
 
 Apple's `<Me>` element (birth date, biological sex) is captured during import and prefills only
 empty profile fields; it never overwrites an edited value. Height is prefilled from the newest
@@ -30,26 +31,44 @@ day's rows from rolling windows. Timestamps in the UI are local wall-clock, not 
 
 ## Authentication
 
-Single-user login for the web UI, no user table. There is **no auth-off mode**: the server refuses
-to boot without valid credentials.
+Single-user login for the web UI, no user table. There is **no auth-off mode**. Authentication
+operates in three states:
+
+1. **`unconfigured`** — Fresh install with neither SQLite credentials nor `.env` credentials: all
+   pages redirect to `/setup` (and non-setup APIs return `503`) until the owner creates a password
+   in the browser via `POST /api/auth/setup`.
+2. **`legacy` (`.env`)** — Credentials loaded from `HEALTHVAULT_PASSWORD_HASH` and
+   `HEALTHVAULT_SESSION_SECRET` (created by `bun run password:set`).
+3. **`stored` (SQLite `auth_credentials`)** — Once credentials are created via `/setup`, changed
+   in **Settings → Account** (`/api/auth/password`), or a harness token is rotated in
+   **Settings → MCP** (`/api/auth/token`), the singleton `auth_credentials` row (`active = 1`) is
+   stored in SQLite.
+
+> **Important (DB credential precedence):** Once `auth_credentials` (`active = 1`) exists in
+> SQLite, it **takes precedence over `.env` / `HEALTHVAULT_PASSWORD_HASH` / `HEALTHVAULT_API_TOKEN`**.
+> Running `bun run password:set` updates `.env` only; to change a password or rotate the agent token
+> on a DB-backed install, use **Settings → Account** or **Settings → MCP** in the web UI.
 
 | Credential | Used by | Stored in |
 |---|---|---|
-| Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in the credentials env file (0600) |
-| Agent API bearer token | MCP/HTTP clients | `HEALTHVAULT_API_TOKEN` or private `HEALTHVAULT_API_TOKEN_FILE` (0600) |
+| Password → `hv_session` cookie (HMAC-SHA256, 30 days, HttpOnly, SameSite=Lax) | the web UI / PWA | `auth_credentials` in SQLite (or legacy `HEALTHVAULT_PASSWORD_HASH` + `HEALTHVAULT_SESSION_SECRET` in `.env` 0600) |
+| Agent API / MCP bearer token | MCP/HTTP clients | `auth_credentials.agent_token` in SQLite, or `HEALTHVAULT_API_TOKEN` / private `HEALTHVAULT_API_TOKEN_FILE` (0600) |
 
-The credentials env file is the project-root `.env` (git-ignored, mode 0600, loaded automatically
-by Next.js) — `bun run password:set` creates and maintains it for you.
+Public allowlist (reachable without a session): `/setup`, `/login`, `/api/auth/setup`,
+`/api/auth/login`, `/api/auth/logout`, `/api/health`, `/sw.js`, `/manifest.webmanifest`, and static
+icons. Everything else requires a valid session cookie or agent bearer token: unauthenticated pages
+redirect to `/login`, unauthenticated API calls get `401`. Login is throttled (5 failures / 15 min
+→ `429`). `GET /api/health` returns `{"ok":true}` only.
 
-Everything except `/api/health` requires a valid session cookie or agent bearer token as applicable:
-unauthenticated pages redirect to `/login`, unauthenticated API calls get 401. Login is throttled
-(5 failures / 15 min → 429). `GET /api/health` is public and returns `{"ok":true}` only.
-`/api/agent/*` accepts a valid session or bearer token and additionally checks the request Host
-against `HEALTHVAULT_ALLOWED_HOSTS` and any supplied Origin against that same origin.
+API surface: `/api/auth/{setup,login,logout,password,token}`, `/api/settings{,/reset}`,
+`/api/mcp`, `/api/mcp/status`, `/api/agent` & `/api/agent/<tool>`, `/api/upload` (`POST` ingest +
+`GET` live progress), `/api/type-stats`, `/api/reminders`, `/api/export` (JSON/CSV manual data
+export), `/api/backup` (WAL-safe SQLite online backup), and `/api/health`.
 
 Environment variables: `DATABASE_PATH`, `HEALTHVAULT_PASSWORD_HASH`, `HEALTHVAULT_SESSION_SECRET`,
 `HEALTHVAULT_API_TOKEN` or `HEALTHVAULT_API_TOKEN_FILE`, `HEALTHVAULT_ALLOWED_HOSTS`,
-`HEALTHVAULT_COOKIE_SECURE` (set `1` behind TLS), `HEALTHVAULT_SESSION_DAYS`.
+`HEALTHVAULT_TRUST_PROXY` (set `1` behind a trusted reverse proxy), `HEALTHVAULT_COOKIE_SECURE`
+(set `1` behind TLS), `HEALTHVAULT_SESSION_DAYS`.
 
 **Set or change the password:**
 
@@ -96,26 +115,32 @@ curl http://127.0.0.1:3040/api/agent/healthvault_context \
   -H 'content-type: application/json' -d '{}'
 ```
 
-**Reads** — `healthvault_context`, `profile_get`, `measurement_history`, `food_search`,
-`nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`, `metrics_series`,
-`workouts_recent`, `record_types`, `records_recent`, `uploads_recent`, `recipe_list`, `recipe_get`,
-`food_template_list`, `meal_get`, `food_history_preview`.
+**Reads** — `healthvault_context` (accepts optional `sections`: `today`, `profile`, `nutrition`,
+`weight`, `supplements`, `training`, `data`), `profile_get`, `measurement_history`, `food_search`
+(with `offset`), `nutrition_day`, `nutrition_summary`, `supplement_list`, `supplement_history`,
+`supplement_adherence`, `metrics_series`, `workouts_recent`, `record_types`, `records_recent`,
+`uploads_recent`, `recipe_list` (with `offset`), `recipe_get`, `recipe_preview`,
+`food_template_list`, `meal_get`, `food_history_preview`, `training_block_get`,
+`strength_history`, `strength_progression`, `weekly_summary`, `five_k_progress`, `sleep_stages`.
 
-**Writes** — `profile_update`, `measurement_add`, `food_add`, `meal_log`, `meal_update`,
-`nutrition_target_set`, `supplement_create`, `supplement_update`, `supplement_log`, `copy_day`,
-`recipe_create`, `recipe_log`, `recipe_update`, `food_template_apply`,
-`food_history_refresh`.
+**Writes** — `profile_update`, `measurement_add`, `food_add`, `food_update`, `meal_log`,
+`meal_update`, `nutrition_target_set`, `supplement_create`, `supplement_update`, `supplement_log`
+(supports single item or atomic `entries` batch), `copy_day`, `recipe_create`, `recipe_log`,
+`recipe_update`, `food_template_apply`, `food_history_refresh`, `training_block_start`,
+`training_session_status`, `strength_log`, `whey_log`, `whey_undo`.
 
 **Deletes** — `measurement_delete`, `food_delete`, `meal_delete`, `supplement_delete`,
-`recipe_delete`.
+`recipe_delete`, `strength_delete`.
 
-The surface covers the nutrition, supplement, measurement and recipe writes including the delete
-paths, plus the read-only aggregation behind `/api/type-stats` (`record_types`). It is not full
-parity with the UI: starting a training block, logging strength sets, one-tap whey, the id-keyed
-food edit behind `/nutrition/foods` (agents upsert with `food_add` by name+brand), and the
-read-only serving preview have no agent tool. `/api/upload` is deliberately **not** exposed to
-agents: importing an `Export.zip` stays a manual step in the UI, and `uploads_recent` only reports
-import history.
+HealthVault exposes all 53 tools plus MCP **resources** (`healthvault://context`,
+`healthvault://profile`, `healthvault://nutrition/today`, `healthvault://training/block`) and
+**prompts** (`daily_checkin`, `weekly_training_review`, `meal_audit`) over both stdio
+(`healthvault-mcp`) and direct Streamable HTTP (`POST /api/mcp`, supporting single and JSON-RPC 2.0
+batch requests with compact JSON + `structuredContent`). Machine access is gated in **Settings →
+MCP** via `mcp.enabled` (default on) and `mcp.lanEnabled` (default off; set
+`HEALTHVAULT_TRUST_PROXY=1` when behind a reverse proxy). `/api/upload` is deliberately **not**
+exposed to agents: importing an `Export.zip` stays a manual step in the UI, and `uploads_recent`
+only reports import history.
 
 `records_recent` serves raw rows for one type (default 50, max 500) and does **not** de-duplicate
 phone/watch overlaps — use `metrics_series` for any daily total or trend, since it picks one source
@@ -262,11 +287,25 @@ old aggregate-only `food_log` rows themselves are untouched.
 - **One-tap whey** (`/supplements`, dashboard): logging and the adherence tick share one
   transaction, which refuses a second tagged entry for the same food on the same day; undo removes
   both the entry and the adherence tick, and is a no-op when nothing was logged.
-- **Nutrition management**: `/nutrition/foods` (bounded search, paginated list, create/edit, safe
-  delete), `/nutrition/recipes` (list, editor, detail with per-meal overrides and a read-only
-  preview before logging), and `/nutrition/corrections` (preview → checkbox → apply with the
-  returned `previewHash`). All of them reuse the service layer, so the UI and the agent API do the
-  same arithmetic.
+- **Nutrition management**: `/nutrition/foods` (bounded search, paginated list, create/edit, food
+  templates, safe delete), `/nutrition/recipes` (list, editor, detail with per-meal overrides,
+  clone/scale, unarchive, and a read-only preview before logging), and `/nutrition/corrections`
+  (preview → checkbox → apply with the returned `previewHash`). All of them reuse the service layer,
+  so the UI and the agent API do the same arithmetic.
+
+### Schema migrations `0006`–`0011`
+
+- `0006_whey_action_association`: adds `food_log.whey_action_json`, `food_log.whey_action_day`
+  (unique), and `supplement_logs.whey_action_id` for atomic one-tap whey undo.
+- `0007_classy_chameleon`: adds `idx_records_type_start_ms` on `records(type_identifier, start_ms)`.
+- `0008_broken_daimon_hellstrom`: adds `app_settings` (versioned cross-device settings) and
+  `auth_credentials` (UI-first single-user credentials).
+- `0009_strong_colleen_wing`: adds `auth_credentials.agent_token` for UI-managed MCP bearer tokens.
+- `0010_performance_indexes`: adds covering/foreign-key indexes on `records`, `workouts`,
+  `activity_summaries`, `recipe_ingredients`, `food_log`, `food_log_ingredients`, and partial unique
+  index `uq_foods_name_null_brand`.
+- `0011_routes_ecg_progress`: adds `workout_routes` (GPX polylines & km splits), `ecg_recordings`
+  (Apple Watch ECG metadata & envelope-downsampled waveforms), and `uploads.rows_processed`.
 
 ## Upgrading from an earlier import
 
@@ -371,11 +410,11 @@ same-origin checks for browser requests. Add the LAN IP/name to `HEALTHVAULT_ALL
 credentials env file. Over plain HTTP the login password crosses the LAN in clear text — keep the
 service on a trusted network, or put an authenticating TLS proxy in front (`deploy/Caddyfile.example`,
 then set `HEALTHVAULT_COOKIE_SECURE=1`). Do not port-forward it.
-Responses carry `X-Robots-Tag: noindex`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+Responses carry `X-Robots-Tag: noindex, nofollow`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
 `Referrer-Policy: no-referrer`, COOP/CORP `same-origin` and a report-only CSP; the service worker
-never caches `/login`, `/api/auth/*` or any `/api/*`. Logout clears the cookie, site caches and
-storage (`Clear-Site-Data`). Known tradeoff: pages cached by the PWA while authenticated remain
-readable offline on that device until logout clears them.
+never caches `/login`, `/setup`, `/api/auth/*`, RSC flight requests, or any `/api/*`. Logout clears
+the cookie, site caches and storage (`Clear-Site-Data`). Known tradeoff: pages cached by the PWA
+while authenticated remain readable offline on that device until logout clears them.
 
 Tests live in `src/test/` and run against throwaway databases under `/tmp/opencode`; they cover the
 services and the auth surface. A process that the guard can identify as a test run refuses the live
@@ -432,8 +471,10 @@ Run the app under whatever supervisor you prefer (tmux, runit, systemd, …); ex
 units plus a daily backup timer for a long-running host live in `deploy/` (see `deploy/README.md`).
 
 **Upgrade:** `bun run db:backup`, stop the app, `git pull && bun install && bun run build`, start
-it, then smoke-test (`/api/health`, login, one MCP read). **Rollback:** `git checkout <sha>`,
-rebuild, restart — auth adds no migration, so the database is unaffected.
+it, then smoke-test (`/api/health`, login, one MCP read). **Rollback:** stop the app, `git checkout
+<sha>`, restore the pre-upgrade database backup (migrations `0006`–`0011` add tables and columns
+including `auth_credentials`, `app_settings`, `workout_routes`, and `ecg_recordings`), rebuild, and
+restart.
 
 ## Ingest design (why it streams)
 
@@ -468,31 +509,38 @@ Parsing rules worth knowing:
 ## Layout
 
 ```
-src/db/schema.ts     drizzle tables: uploads, records, workouts, activity_summaries,
-                     profile, measurements, nutrition_targets, foods, food_log,
+src/db/schema.ts     drizzle tables: uploads, records, workouts, workout_routes,
+                     ecg_recordings, activity_summaries, profile, measurements,
+                     measures, nutrition_targets, foods, food_log,
                      food_log_ingredients, food_revisions, food_log_revisions,
                      recipes, recipe_ingredients, planned_sessions, strength_sets,
-                     supplements, supplement_logs
-src/db/index.ts      sqlite connection + migrate-on-boot + private file modes
-src/db/queries.ts    aggregate SQL (single-source-per-day, deduped workouts, local-day windows)
+                     supplements, supplement_logs, app_settings, auth_credentials
+src/db/index.ts      sqlite connection + WAL/PRAGMA tuning + migrate-on-boot + private file modes
+src/db/queries.ts    aggregate SQL (single-source-per-day, deduped workouts, GPX/ECG, local-day windows)
 src/lib/auth.ts      scrypt verify, session cookie sign/verify, throttle
-src/lib/auth-config.ts  credential loading + fail-fast validation
+src/lib/auth-config.ts  3-state credential loading (unconfigured / legacy env / stored SQLite)
 src/lib/day.ts       timezone helpers: local day, windows, formatting
 src/lib/xml.ts       incremental Apple Health XML parser (+ <Me>)
-src/lib/ingest.ts    streaming ingest + profile prefill
-src/lib/services/    profile, measurements, nutrition, recipes, food-history, training,
-                     training-plan, strength, whey, supplements, context
-src/proxy.ts         Next 16 Proxy: session gate, public allowlist, no-store caching
+src/lib/gpx.ts       GPX workout route parser (distance, elevation, km splits, polyline)
+src/lib/ecg.ts       Apple Watch ECG CSV parser (metadata + envelope-downsampled waveform)
+src/lib/ingest.ts    streaming ingest (XML + GPX + ECG) + live progress + profile prefill
+src/lib/services/    profile, measurements, measures, nutrition, recipes, food-history,
+                     food-templates, training, training-plan, strength, whey, supplements,
+                     settings, mcp, context
+src/proxy.ts         Next 16 Proxy: 3-state auth gate, MCP enable/LAN gate, public allowlist, no-store
 src/instrumentation.ts  boot-time credential validation
-src/app/             dashboard (/), login, training, workouts, explorer, uploads,
-                     profile, nutrition (+ /nutrition/foods, /nutrition/recipes,
-                     /nutrition/corrections), supplements + api/auth, api/health,
-                     api/upload, api/type-stats, api/reminders, api/agent
-src/components/      charts, explorer client, upload form, login form, app nav,
-                     nutrition/*, training/*, supplements/*, ui/* (shadcn)
+src/app/             dashboard (/), setup, login, training (+ plan, strength), workouts (+ [id]),
+                     explorer, uploads, profile, measurements, nutrition (+ foods, recipes, targets,
+                     corrections), supplements (+ regimens, history), settings/* + api/{auth,health,
+                     upload,type-stats,reminders,agent,mcp,settings,export,backup}
+src/components/      charts, dashboard/*, workouts/*, ecg-viewer, explorer client, upload form,
+                     login/setup forms, app nav, nutrition/*, training/*, supplements/*,
+                     settings/*, profile/*, ui/* (shadcn)
 scripts/backup-db.ts WAL-safe online backup
+scripts/migrate-db.ts standalone Drizzle migration runner
+scripts/seed-synthetic.ts isolated synthetic data generator (scratch DBs only)
 scripts/password.ts  password:set / password:verify credential tool
-plugins/healthvault/ MCP stdio server exposing the agent API to any harness
+plugins/healthvault/ MCP stdio server exposing 53 tools + resources + prompts to any harness
 deploy/              systemd units + backup timer (maintainer's host), Caddyfile.example, deploy README
 ```
 

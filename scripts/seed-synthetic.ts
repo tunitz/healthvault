@@ -3,10 +3,18 @@
  * Never point DATABASE_PATH at the live database when running this.
  */
 import Database from "better-sqlite3";
+import { resolve } from "node:path";
+import { testDatabaseSymlinkViolation, testDatabaseViolation } from "../src/db/guard";
 
-const path = process.env.DATABASE_PATH;
-if (!path || path.includes("projects/healthvault/data")) {
-  throw new Error("Refusing to seed: set DATABASE_PATH to an isolated scratch database");
+const path = process.env.DATABASE_PATH?.trim();
+const liveDataDir = resolve(process.cwd(), "data").toLowerCase();
+const violation = path
+  ? testDatabaseViolation(path) ??
+    testDatabaseSymlinkViolation(path) ??
+    (resolve(path).toLowerCase().startsWith(liveDataDir) ? "inside live data directory" : undefined)
+  : "DATABASE_PATH is not set";
+if (!path || violation) {
+  throw new Error(`Refusing to seed (${violation}): set DATABASE_PATH to an isolated scratch database`);
 }
 const db = new Database(path);
 db.pragma("journal_mode = WAL");

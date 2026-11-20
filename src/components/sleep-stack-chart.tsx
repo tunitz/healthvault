@@ -106,6 +106,7 @@ export function SleepStackChart({ data }: { data: SleepStageRow[] }) {
                 stackId="sleep"
                 fill={`var(--color-${key})`}
                 radius={i === present.length - 1 ? [3, 3, 0, 0] : 0}
+                isAnimationActive={false}
               />
             ))}
           </BarChart>

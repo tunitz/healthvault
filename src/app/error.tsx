@@ -1,12 +1,27 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 
-export default function Error({ error, retry }: { error: Error & { digest?: string }; retry: () => void }) {
+export default function Error({
+  error,
+  retry,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  retry?: () => void;
+  reset?: () => void;
+}) {
   useEffect(() => {
     console.error(error);
   }, [error]);
+
+  const handleRetry = () => {
+    if (typeof retry === "function") retry();
+    else if (typeof reset === "function") reset();
+    else window.location.reload();
+  };
 
   return (
     <div className="flex flex-col items-start gap-3">
@@ -15,7 +30,12 @@ export default function Error({ error, retry }: { error: Error & { digest?: stri
         The page could not be loaded. Try again; if it keeps failing, check the server log.
       </p>
       {error.digest ? <p className="num text-xs text-muted-foreground">Reference: {error.digest}</p> : null}
-      <Button onClick={() => retry()}>Try again</Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={handleRetry}>Try again</Button>
+        <Button asChild variant="outline">
+          <Link href="/">Back to Dashboard</Link>
+        </Button>
+      </div>
     </div>
   );
 }

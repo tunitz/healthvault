@@ -164,7 +164,13 @@ export function WheySetupForm({
       </details>
 
       {link ? (
-        <ActionForm action={saveWheyLinkAction} className="flex justify-end">
+        <ActionForm
+          action={saveWheyLinkAction}
+          confirm="Remove the one-tap whey link? Past meals and supplement logs stay intact."
+          confirmTitle="Remove whey link?"
+          confirmLabel="Remove link"
+          className="flex justify-end"
+        >
           <input type="hidden" name="clear" value="1" />
           <SubmitButton size="xs" variant="ghost">
             Remove link

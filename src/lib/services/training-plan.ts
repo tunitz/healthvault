@@ -294,23 +294,6 @@ export function startBlock(startDate: unknown, options: StartBlockOptions = {}):
   const start = dayField(startDate, "startDate");
   if (weekdayIndex(start) !== 1) fail("Start date must be a Monday", 400);
 
-  const existing = db
-    .select({ blockStart: plannedSessions.blockStart, status: plannedSessions.status })
-    .from(plannedSessions)
-    .where(isNotNull(plannedSessions.blockStart))
-    .all();
-
-  const unfinished = existing.find((row) => row.status === "planned");
-  if (unfinished?.blockStart) {
-    fail(
-      `A training block starting ${unfinished.blockStart} is still in progress; finish or skip its remaining sessions first`,
-      409,
-    );
-  }
-  if (existing.some((row) => row.blockStart === start)) {
-    fail(`A training block already starts on ${start}`, 409);
-  }
-
   const includeStrength = options.includeStrength === true;
   const now = Date.now();
   const rows: (typeof plannedSessions.$inferInsert)[] = [];
@@ -337,6 +320,22 @@ export function startBlock(startDate: unknown, options: StartBlockOptions = {}):
   if (rows.length === 0) fail("Training block generated no sessions", 500);
 
   sqlite.transaction(() => {
+    const existing = db
+      .select({ blockStart: plannedSessions.blockStart, status: plannedSessions.status })
+      .from(plannedSessions)
+      .where(isNotNull(plannedSessions.blockStart))
+      .all();
+
+    const unfinished = existing.find((row) => row.status === "planned");
+    if (unfinished?.blockStart) {
+      fail(
+        `A training block starting ${unfinished.blockStart} is still in progress; finish or skip its remaining sessions first`,
+        409,
+      );
+    }
+    if (existing.some((row) => row.blockStart === start)) {
+      fail(`A training block already starts on ${start}`, 409);
+    }
     db.insert(plannedSessions).values(rows).run();
   })();
 

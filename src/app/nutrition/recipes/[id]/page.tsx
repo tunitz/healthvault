@@ -17,6 +17,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cloneRecipeAction, unarchiveRecipeAction } from "@/app/actions";
+import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   DeleteRecipeForm,
   RecipeLogForm,
@@ -127,10 +129,20 @@ export default async function RecipeDetailPage(props: { params: Promise<{ id: st
             </p>
           </div>
           {!recipe.archived ? (
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Button asChild variant="outline" size="sm">
                 <Link href={`/nutrition/recipes/${recipe.id}/edit`}>Edit</Link>
               </Button>
+              <ActionForm action={cloneRecipeAction} className="inline-flex">
+                <input type="hidden" name="id" value={recipe.id} />
+                <input type="hidden" name="scale" value="0.5" />
+                <SubmitButton variant="outline" size="sm">Clone 0.5×</SubmitButton>
+              </ActionForm>
+              <ActionForm action={cloneRecipeAction} className="inline-flex">
+                <input type="hidden" name="id" value={recipe.id} />
+                <input type="hidden" name="scale" value="2" />
+                <SubmitButton variant="outline" size="sm">Clone 2×</SubmitButton>
+              </ActionForm>
               <DeleteRecipeForm
                 key={recipe.id}
                 id={recipe.id}
@@ -138,7 +150,12 @@ export default async function RecipeDetailPage(props: { params: Promise<{ id: st
                 returnTo="/nutrition/recipes"
               />
             </div>
-          ) : null}
+          ) : (
+            <ActionForm action={unarchiveRecipeAction} className="inline-flex">
+              <input type="hidden" name="id" value={recipe.id} />
+              <SubmitButton variant="outline" size="sm">Restore recipe</SubmitButton>
+            </ActionForm>
+          )}
         </div>
         {recipe.note ? <p className="max-w-2xl break-words text-sm text-muted-foreground">{recipe.note}</p> : null}
       </div>

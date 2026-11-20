@@ -32,9 +32,54 @@ export type ParsedHealth = {
   me: MeCharacteristics;
 };
 
-/** "2026-09-01 07:30:00 +0800" -> epoch ms. Apple writes a space before the offset, which Date rejects verbatim. */
+function digits2(s: string, i: number): number {
+  const a = s.charCodeAt(i) - 48;
+  const b = s.charCodeAt(i + 1) - 48;
+  return a >= 0 && a <= 9 && b >= 0 && b <= 9 ? a * 10 + b : -1;
+}
+
+/** "2026-09-01 07:30:00 +0800" -> epoch ms. Fast-path fixed-offset parser avoids regex & Date string allocation across 2M+ timestamps. */
 export function msOf(s: string): number {
   if (!s) return 0;
+  // Standard Apple Health format: "YYYY-MM-DD HH:MM:SS +HHMM" (length 25) or "YYYY-MM-DDTHH:MM:SS+HH:MM" (25)
+  if (
+    s.length >= 19 &&
+    s.charCodeAt(4) === 45 &&
+    s.charCodeAt(7) === 45 &&
+    (s.charCodeAt(10) === 32 || s.charCodeAt(10) === 84) &&
+    s.charCodeAt(13) === 58 &&
+    s.charCodeAt(16) === 58
+  ) {
+    const y1 = digits2(s, 0);
+    const y2 = digits2(s, 2);
+    const mo = digits2(s, 5);
+    const d = digits2(s, 8);
+    const hh = digits2(s, 11);
+    const mi = digits2(s, 14);
+    const ss = digits2(s, 17);
+    if (y1 >= 0 && y2 >= 0 && mo >= 1 && d >= 1 && hh >= 0 && mi >= 0 && ss >= 0) {
+      const year = y1 * 100 + y2;
+      if (s.length === 19) {
+        return new Date(year, mo - 1, d, hh, mi, ss).getTime();
+      }
+      // Skip optional space before offset
+      let offIdx = 19;
+      if (s.charCodeAt(offIdx) === 32) offIdx += 1;
+      const signCh = s.charCodeAt(offIdx);
+      if (signCh === 90 && offIdx + 1 === s.length) {
+        return Date.UTC(year, mo - 1, d, hh, mi, ss);
+      }
+      if (signCh === 43 || signCh === 45) {
+        const oh = digits2(s, offIdx + 1);
+        const colon = s.charCodeAt(offIdx + 3) === 58 ? 1 : 0;
+        const om = digits2(s, offIdx + 3 + colon);
+        if (oh >= 0 && om >= 0 && offIdx + 5 + colon === s.length) {
+          const offsetMs = (oh * 60 + om) * 60_000 * (signCh === 43 ? 1 : -1);
+          return Date.UTC(year, mo - 1, d, hh, mi, ss) - offsetMs;
+        }
+      }
+    }
+  }
   const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\s*([+-]\d{2}):?(\d{2}))?$/);
   if (m) return new Date(`${m[1]}T${m[2]}${m[3] ? m[3] + ":" + m[4] : ""}`).getTime();
   return new Date(s).getTime();
@@ -50,7 +95,11 @@ const STAGE: Record<string, number> = {
   HKCategoryValueSleepAnalysisAsleepREM: 6,
 };
 
-const num = (v: string | undefined): number | undefined => (v === undefined || v === "" ? undefined : Number(v));
+const num = (v: string | undefined): number | undefined => {
+  if (v === undefined || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
 const dayOf = (iso: string) => iso.slice(0, 10);
 
 // Apple exports whatever unit the recording device used; known distance units are normalised to km.
@@ -65,7 +114,11 @@ export function toKm(value: number, unit?: string): number | undefined {
   }
 }
 export function toKcal(value: number, unit?: string): number {
-  switch ((unit ?? "").toLowerCase()) {
+  const trimmed = (unit ?? "").trim();
+  // Capital-C "Cal" (dietary/Apple Health Calories) is kilocalories (kcal), not small calories.
+  if (trimmed === "Cal") return value;
+  switch (trimmed.toLowerCase()) {
+    case "kcal": return value;
     case "kj": return value * 0.2390057;
     case "cal": return value / 1000;
     default: return value;
@@ -120,9 +173,13 @@ export function createHealthParser() {
     if (t.name === "Workout") { workout = t; meta = {}; stats = {}; return; }
     if (t.name === "ActivitySummary") {
       const a = t.attributes;
+      const energyUnit = a.activeEnergyBurnedUnit as string | undefined;
+      const energyRaw = num(a.activeEnergyBurned);
+      const energyGoalRaw = num(a.activeEnergyBurnedGoal);
       rows.summaries.push({
         dateComponents: String(a.dateComponents ?? ""), day: dayOf(String(a.dateComponents ?? "")),
-        activeEnergyBurned: num(a.activeEnergyBurned), activeEnergyBurnedGoal: num(a.activeEnergyBurnedGoal),
+        activeEnergyBurned: energyRaw === undefined ? undefined : toKcal(energyRaw, energyUnit),
+        activeEnergyBurnedGoal: energyGoalRaw === undefined ? undefined : toKcal(energyGoalRaw, energyUnit),
         appleMoveMinutes: num(a.appleMoveMinutes), appleMoveMinutesGoal: num(a.appleMoveMinutesGoal),
         appleExerciseTime: num(a.appleExerciseTime), appleExerciseTimeGoal: num(a.appleExerciseTimeGoal),
         appleStandHours: num(a.appleStandHours), appleStandHoursGoal: num(a.appleStandHoursGoal),

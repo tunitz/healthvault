@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ComponentProps, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
 import type { AppearanceSettings, ChartPalette, CustomColors, ThemeMode } from "@/lib/services/settings";
 
@@ -241,10 +242,27 @@ if(v.fontSizePx){r.style.fontSize=v.fontSizePx+'px';}}
 }catch(e){}})();`;
 
 /** Re-apply the server copy on load; next-themes keeps light/dark/system independent. */
-function SettingsApplier({ children }: { children: ReactNode }) {
+function SettingsApplier({
+  children,
+  initialAppearance,
+}: {
+  children: ReactNode;
+  initialAppearance?: AppearanceSettings;
+}) {
   const { setTheme } = useTheme();
+  const pathname = usePathname();
   const appliedModeRef = useRef(false);
   useEffect(() => {
+    if (initialAppearance) {
+      applyAppearance(initialAppearance);
+      cacheAppearance(initialAppearance);
+      if (!appliedModeRef.current) {
+        appliedModeRef.current = true;
+        setTheme(initialAppearance.mode);
+      }
+      return;
+    }
+    if (pathname === "/login" || pathname === "/setup") return;
     let cancelled = false;
     fetch("/api/settings", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
@@ -267,11 +285,15 @@ function SettingsApplier({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [setTheme]);
+  }, [initialAppearance, pathname, setTheme]);
   return <>{children}</>;
 }
 
-export function ThemeProvider({ children, ...props }: ComponentProps<typeof NextThemesProvider>) {
+export function ThemeProvider({
+  children,
+  initialAppearance,
+  ...props
+}: ComponentProps<typeof NextThemesProvider> & { initialAppearance?: AppearanceSettings }) {
   return (
     <NextThemesProvider
       attribute="class"
@@ -281,7 +303,7 @@ export function ThemeProvider({ children, ...props }: ComponentProps<typeof Next
       {...props}
     >
       <script dangerouslySetInnerHTML={{ __html: BOOTSTRAP }} />
-      <SettingsApplier>{children}</SettingsApplier>
+      <SettingsApplier initialAppearance={initialAppearance}>{children}</SettingsApplier>
     </NextThemesProvider>
   );
 }

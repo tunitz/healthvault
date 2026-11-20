@@ -16,6 +16,7 @@ export function SeriesChart({
   unit = "",
   colorVar = "var(--chart-1)",
   ariaLabel,
+  xTickFormatter,
 }: {
   data: SeriesPoint[];
   kind: "line" | "area" | "bars";
@@ -23,12 +24,14 @@ export function SeriesChart({
   unit?: string;
   colorVar?: string;
   ariaLabel: string;
+  xTickFormatter?: (value: string) => string;
 }) {
   const gradientId = `series-fill-${useId().replace(/:/g, "")}`;
   const config = { value: { label, color: colorVar } } satisfies ChartConfig;
   if (data.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">No data in this range</p>;
   }
+  const formatX = xTickFormatter ?? ((value: string) => String(value).slice(5));
   const axis = (
     <>
       <CartesianGrid vertical={false} stroke="var(--border)" />
@@ -40,7 +43,7 @@ export function SeriesChart({
         minTickGap={40}
         interval="preserveStartEnd"
         tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
-        tickFormatter={(value: string) => String(value).slice(5)}
+        tickFormatter={(value: string) => formatX(String(value))}
       />
       <YAxis
         width={44}
@@ -61,12 +64,12 @@ export function SeriesChart({
       {kind === "bars" ? (
         <BarChart {...common}>
           {axis}
-          <Bar dataKey="value" fill="var(--color-value)" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="value" fill="var(--color-value)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
         </BarChart>
       ) : kind === "line" ? (
         <LineChart {...common}>
           {axis}
-          <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={false} isAnimationActive={false} />
         </LineChart>
       ) : (
         <AreaChart {...common}>
@@ -77,7 +80,7 @@ export function SeriesChart({
             </linearGradient>
           </defs>
           {axis}
-          <Area type="monotone" dataKey="value" stroke="var(--color-value)" fill={`url(#${gradientId})`} strokeWidth={2} />
+          <Area type="monotone" dataKey="value" stroke="var(--color-value)" fill={`url(#${gradientId})`} strokeWidth={2} isAnimationActive={false} />
         </AreaChart>
       )}
     </ChartContainer>

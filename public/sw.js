@@ -1,19 +1,24 @@
 // Health Vault service worker: read-only offline cache.
 // Bump VERSION whenever cache layout or caching rules change.
-const VERSION = "v4";
+const VERSION = "v5";
 const CACHE = `healthvault-${VERSION}`;
+const MAX_CACHE_ENTRIES = 60;
 const NETWORK_TIMEOUT_MS = 4000;
 const OFFLINE_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Health Vault (offline)</title>
+<title>HealthVault (offline)</title>
 <style>
   html,body{margin:0;height:100%;font-family:system-ui,-apple-system,sans-serif;background:#f7f8fa;color:#16181c}
   @media (prefers-color-scheme:dark){html,body{background:#16181c;color:#e6e8ec}}
-  main{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center}
-  p{color:#6b7280;font-size:14px}
+  main{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;gap:12px}
+  p{color:#6b7280;font-size:14px;margin:0;max-width:340px}
+  .actions{display:flex;gap:10px;margin-top:8px}
+  a,button{font:inherit;font-size:14px;padding:8px 14px;border-radius:8px;border:1px solid #d1d5db;background:transparent;color:inherit;text-decoration:none;cursor:pointer}
+  @media (prefers-color-scheme:dark){a,button{border-color:#374151}}
 </style></head>
-<body><main><h1 style="font-size:20px;margin:0 0 8px">Offline and nothing cached yet</h1>
-<p>Connect to the network once to load this page. Pages you have viewed will be available offline.</p></main></body></html>`;
+<body><main><h1 style="font-size:20px;margin:0">Offline and this page isn&rsquo;t cached</h1>
+<p>Connect to the network once to load this page. Pages you have visited remain available offline.</p>
+<div class="actions"><button onclick="location.reload()">Try again</button><a href="/">Dashboard</a></div></main></body></html>`;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -42,13 +47,36 @@ function isStaticAsset(url) {
   );
 }
 
+function isNextRouterFlightRequest(request, url) {
+  return (
+    request.headers.has("RSC") ||
+    request.headers.has("Next-Router-State-Tree") ||
+    request.headers.has("Next-Router-Prefetch") ||
+    request.headers.has("Next-Router-Segment-Prefetch") ||
+    url.searchParams.has("_rsc")
+  );
+}
+
+async function putBounded(cache, request, response) {
+  try {
+    await cache.put(request, response);
+    const keys = await cache.keys();
+    if (keys.length > MAX_CACHE_ENTRIES) {
+      const excess = keys.length - MAX_CACHE_ENTRIES;
+      await Promise.all(keys.slice(0, excess).map((k) => cache.delete(k)));
+    }
+  } catch {
+    // Best-effort cache write; quota errors must not break responses.
+  }
+}
+
 async function cacheFirst(request) {
   const cache = await caches.open(CACHE);
-  const hit = await cache.match(request, { ignoreVary: true });
+  const hit = await cache.match(request);
   if (hit) return hit;
   const response = await fetch(request);
   if (response.ok && response.status === 200) {
-    cache.put(request, response.clone()).catch(() => {});
+    putBounded(cache, request, response.clone());
   }
   return response;
 }
@@ -57,8 +85,13 @@ async function networkFirst(request, isNavigation) {
   const cache = await caches.open(CACHE);
 
   const network = fetch(request).then((response) => {
-    if (response.ok && response.status === 200) {
-      cache.put(request, response.clone()).catch(() => {});
+    const contentType = response.headers.get("Content-Type") || "";
+    const cacheable =
+      response.ok &&
+      response.status === 200 &&
+      (!isNavigation || contentType.includes("text/html"));
+    if (cacheable) {
+      putBounded(cache, request, response.clone());
     }
     return response;
   });
@@ -78,12 +111,10 @@ async function networkFirst(request, isNavigation) {
     clearTimeout(timer);
   }
 
-  const cached = await cache.match(request, { ignoreVary: true });
+  const cached = await cache.match(request);
   if (cached) return cached;
 
   if (isNavigation) {
-    const home = await cache.match("/", { ignoreVary: true });
-    if (home) return home;
     return new Response(OFFLINE_HTML, {
       status: 503,
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
@@ -104,6 +135,9 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // Never intercept Next.js App Router RSC Flight or prefetch requests so text/x-component
+  // payloads can never collide with text/html document responses in CacheStorage.
+  if (isNextRouterFlightRequest(request, url)) return;
   // API responses are live data: caching them made the Explorer show yesterday's numbers
   // (and /api/type-stats is a ~1M-row scan, so it must not be replayed from a stale cache).
   if (url.pathname.startsWith("/api/")) return;
@@ -121,5 +155,6 @@ self.addEventListener("fetch", (event) => {
   }
 
   const isNavigation = request.mode === "navigate";
-  event.respondWith(networkFirst(request, isNavigation));
+  if (!isNavigation) return;
+  event.respondWith(networkFirst(request, true));
 });

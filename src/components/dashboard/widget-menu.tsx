@@ -17,6 +17,8 @@ import {
   orderedVisibleWidgets,
   RANGES,
   RANGE_LABELS,
+  SIZES,
+  SIZE_LABELS,
   WIDGET_META,
 } from "./registry";
 import type { WidgetId } from "./registry";
@@ -25,6 +27,7 @@ import type {
   WidgetDisplay,
   WidgetPreference,
   WidgetRange,
+  WidgetSize,
 } from "@/lib/services/settings";
 import { ConflictError, errorMessage, fetchSettings, saveSettings } from "./settings-api";
 
@@ -44,9 +47,10 @@ export type WidgetMenuProps = {
   total: number;
   range: WidgetRange;
   display: WidgetDisplay;
+  size?: WidgetSize;
 };
 
-export function WidgetMenu({ id, index, total, range, display }: WidgetMenuProps) {
+export function WidgetMenu({ id, index, total, range, display, size }: WidgetMenuProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -60,13 +64,32 @@ export function WidgetMenu({ id, index, total, range, display }: WidgetMenuProps
   const label = `${RANGE_LABELS[range]} · ${DISPLAY_LABELS[display]} · ${index + 1}/${total}`;
   const currentDisplay = allowedDisplay(id, display);
 
-  // Escape closes and returns focus to the trigger; a press outside the widget closes too.
+  // Escape closes and returns focus to the trigger; arrows/Home/End navigate menu items; outside click closes.
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpen(false);
         triggerRef.current?.focus();
+        return;
+      }
+      const menu = menuRef.current;
+      if (!menu) return;
+      const items = [...menu.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')];
+      if (items.length === 0) return;
+      const activeIdx = items.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        items[(activeIdx + 1) % items.length].focus();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        items[(activeIdx - 1 + items.length) % items.length].focus();
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        items[0].focus();
+      } else if (event.key === "End") {
+        event.preventDefault();
+        items[items.length - 1].focus();
       }
     }
     function onPointerDown(event: PointerEvent) {
@@ -137,6 +160,20 @@ export function WidgetMenu({ id, index, total, range, display }: WidgetMenuProps
     persist((widgets) => {
       if (!widgets[id] || widgets[id].display === next) return false;
       widgets[id] = { ...widgets[id], display: next };
+      return true;
+    });
+
+  const chooseSize = (next: WidgetSize) =>
+    persist((widgets) => {
+      if (!widgets[id] || widgets[id].size === next) return false;
+      widgets[id] = { ...widgets[id], size: next };
+      return true;
+    });
+
+  const hideWidget = () =>
+    persist((widgets) => {
+      if (!widgets[id] || !widgets[id].visible) return false;
+      widgets[id] = { ...widgets[id], visible: false };
       return true;
     });
 
@@ -215,6 +252,28 @@ export function WidgetMenu({ id, index, total, range, display }: WidgetMenuProps
             </button>
           ))}
 
+          {size ? (
+            <>
+              <div className="my-1 border-t border-border" />
+              <p className={headingClass}>Size</p>
+              {SIZES.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={option === size}
+                  aria-label={SIZE_LABELS[option]}
+                  disabled={busy}
+                  onClick={() => chooseSize(option)}
+                  className={itemClass}
+                >
+                  <span>{SIZE_LABELS[option]}</span>
+                  {option === size ? <Check aria-hidden className="size-3.5 text-primary" /> : null}
+                </button>
+              ))}
+            </>
+          ) : null}
+
           <div className="my-1 border-t border-border" />
           <p className={headingClass}>Position</p>
           <button
@@ -238,6 +297,17 @@ export function WidgetMenu({ id, index, total, range, display }: WidgetMenuProps
           >
             <span>Move down</span>
             <ArrowDown aria-hidden className="size-3.5" />
+          </button>
+          <div className="my-1 border-t border-border" />
+          <button
+            type="button"
+            role="menuitem"
+            aria-label={`Hide ${title} widget`}
+            disabled={busy}
+            onClick={hideWidget}
+            className={cn(itemClass, "text-muted-foreground hover:text-destructive")}
+          >
+            <span>Hide card</span>
           </button>
 
           {error || conflict ? (

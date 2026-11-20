@@ -250,9 +250,14 @@ describe("logWhey", () => {
     expectValidation(() => whey.logWhey(), 409, /not configured/);
 
     const food = addWheyFood();
-    profileService.updateProfile({ wheyLink: { foodId: food.id, supplementId: null, grams: 32.4 } });
-    nutrition.deleteFood(food.id);
+    const supplement = supplements.createSupplement({ name: "Linked Whey" });
+    profileService.updateProfile({ wheyLink: { foodId: food.id, supplementId: supplement.id, grams: 32.4 } });
+    // Linked food and supplement cannot be deleted while pointed to by one-tap whey.
+    expectValidation(() => nutrition.deleteFood(food.id), 409, /one-tap whey/);
+    expectValidation(() => supplements.deleteSupplement(supplement.id), 409, /one-tap whey/);
 
+    // Simulate a dangling link (bypassing service validation).
+    setWheyLink({ foodId: 999_999, supplementId: null, grams: 32.4, meal: "snack" });
     expectValidation(() => whey.logWhey(), 409, /no longer exists/);
     expect(count("food_log")).toBe(0);
   });

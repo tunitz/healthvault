@@ -307,6 +307,7 @@ export interface MeasurementDeleteInput {
 export interface FoodSearchInput {
   query?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface FoodAddInput {
@@ -321,6 +322,24 @@ export interface FoodAddInput {
   measuresJson?: string;
   extra?: unknown;
   source?: string;
+  sourceUrl?: string;
+  sourceDate?: string;
+}
+
+export interface FoodUpdateInput {
+  id: number;
+  name?: string;
+  brand?: string | null;
+  barcode?: string | null;
+  servingGrams?: number;
+  per100g?: Partial<MacrosInput>;
+  state?: FoodState;
+  yieldFactor?: number;
+  measures?: Record<string, number> | null;
+  extra?: unknown;
+  source?: string;
+  sourceUrl?: string | null;
+  sourceDate?: string | null;
 }
 
 export interface FoodDeleteInput {
@@ -505,6 +524,7 @@ export interface RecipeDeleteInput {
 export interface RecipeListInput {
   query?: string;
   limit?: number;
+  offset?: number;
   includeArchived?: boolean;
 }
 
@@ -604,6 +624,7 @@ export interface RecipeLogResult {
 
 export interface NutritionDayInput {
   day?: Day;
+  includeIngredients?: boolean;
 }
 
 export interface NutritionSummaryInput {
@@ -733,7 +754,7 @@ export interface SupplementUpdateInput {
   active?: boolean;
 }
 
-export interface SupplementLogInput {
+export interface SupplementLogSingleInput {
   supplementId: number;
   day?: Day;
   taken?: boolean;
@@ -742,6 +763,13 @@ export interface SupplementLogInput {
   takenAt?: number | string;
   note?: string;
 }
+
+export type SupplementLogInput =
+  | SupplementLogSingleInput
+  | {
+      day?: Day;
+      entries: SupplementLogSingleInput[];
+    };
 
 export interface SupplementLogResult {
   logged: boolean;
@@ -920,6 +948,75 @@ export interface HealthContext {
   };
 }
 
+export interface TrainingBlockStartInput {
+  startDate: Day;
+  includeStrength?: boolean;
+}
+
+export interface TrainingSessionStatusInput {
+  id: number;
+  status: "planned" | "done" | "skipped";
+  workoutId?: number | null;
+}
+
+export interface StrengthLogInput {
+  day?: Day;
+  exercise: string;
+  sets: { reps?: number; loadKg?: number }[];
+  note?: string;
+  workoutId?: number;
+}
+
+export interface StrengthHistoryInput {
+  days?: number;
+}
+
+export interface StrengthProgressionInput {
+  exercise: string;
+  weeks?: number;
+}
+
+export interface StrengthDeleteInput {
+  id: number;
+}
+
+export interface WheyLogInput {
+  day?: Day;
+  eatenAt?: number | string;
+}
+
+export interface WheyUndoInput {
+  day?: Day;
+}
+
+export interface WeeklySummaryInput {
+  weekOffset?: number;
+}
+
+export interface FiveKProgressInput {
+  days?: number;
+}
+
+export interface SleepStagesInput {
+  days?: number;
+}
+
+export interface SupplementAdherenceInput {
+  weeks?: number;
+}
+
+export interface RecipePreviewInput {
+  recipeId?: number;
+  draft?: {
+    name?: string;
+    servings?: number;
+    ingredients: RecipeIngredientInput[];
+  };
+  servingFraction?: number;
+  amountBasis?: "batch" | "serving";
+  ingredientOverrides?: RecipeIngredientOverride[];
+}
+
 export type HealthVaultClientOptions = ServerOptions;
 
 export function createClient(options: ServerOptions = {}) {
@@ -1018,6 +1115,41 @@ export function createClient(options: ServerOptions = {}) {
       server.request<RecordsRecentResult>("records_recent", input, signal),
     uploadsRecent: (input: UploadsRecentInput = {}, signal?: AbortSignal) =>
       server.request<UploadRow[]>("uploads_recent", input, signal),
+
+    trainingBlockGet: (signal?: AbortSignal) =>
+      server.request<unknown>("training_block_get", {}, signal),
+    trainingBlockStart: (input: TrainingBlockStartInput, signal?: AbortSignal) =>
+      server.request<unknown>("training_block_start", input, signal),
+    trainingSessionStatus: (input: TrainingSessionStatusInput, signal?: AbortSignal) =>
+      server.request<unknown>("training_session_status", input, signal),
+
+    strengthLog: (input: StrengthLogInput, signal?: AbortSignal) =>
+      server.request<unknown>("strength_log", input, signal),
+    strengthHistory: (input: StrengthHistoryInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("strength_history", input, signal),
+    strengthProgression: (input: StrengthProgressionInput, signal?: AbortSignal) =>
+      server.request<unknown>("strength_progression", input, signal),
+    strengthDelete: (input: StrengthDeleteInput, signal?: AbortSignal) =>
+      server.request<{ deleted: boolean }>("strength_delete", input, signal),
+
+    wheyLog: (input: WheyLogInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("whey_log", input, signal),
+    wheyUndo: (input: WheyUndoInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("whey_undo", input, signal),
+
+    foodUpdate: (input: FoodUpdateInput, signal?: AbortSignal) =>
+      server.request<Food>("food_update", input, signal),
+
+    weeklySummary: (input: WeeklySummaryInput = {}, signal?: AbortSignal) =>
+      server.request<WeeklySummary>("weekly_summary", input, signal),
+    fiveKProgress: (input: FiveKProgressInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("five_k_progress", input, signal),
+    sleepStages: (input: SleepStagesInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("sleep_stages", input, signal),
+    supplementAdherence: (input: SupplementAdherenceInput = {}, signal?: AbortSignal) =>
+      server.request<unknown>("supplement_adherence", input, signal),
+    recipePreview: (input: RecipePreviewInput, signal?: AbortSignal) =>
+      server.request<unknown>("recipe_preview", input, signal),
   };
 }
 

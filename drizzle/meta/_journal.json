@@ -71,6 +71,20 @@
       "when": 1794959898100,
       "tag": "0009_strong_colleen_wing",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795181014067,
+      "tag": "0010_performance_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795182651022,
+      "tag": "0011_routes_ecg_progress",
+      "breakpoints": true
     }
   ]
 }

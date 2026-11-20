@@ -1,4 +1,4 @@
-import { isDay, isValidTimezone } from "@/lib/day";
+import { isDay, isValidTimezone, localTimeMs } from "@/lib/day";
 
 /** An error safe to show to the API caller / form; `status` maps to the HTTP code. */
 export class ValidationError extends Error {
@@ -94,6 +94,51 @@ export function jsonField(value: unknown, name: string): string | null {
 
 export function idField(value: unknown, name = "id"): number {
   return numField(value, name, { required: true, integer: true, min: 1 })!;
+}
+
+/**
+ * ISO timestamp or epoch milliseconds -> epoch ms.
+ *
+ * A timestamp *without* an offset ("2026-11-10T08:00:00", seconds optional) is a wall-clock time
+ * in the profile timezone, not the server's: the same log must mean 08:00 for the user wherever
+ * the process runs. An explicit offset (`+08:00`, `Z`) and epoch milliseconds are taken as-is.
+ */
+export function instantField(value: unknown, name: string, timezone: string): number {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    fail(`${name} must be an ISO timestamp or epoch milliseconds`);
+  }
+
+  const text = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    fail(`${name} must include a time (ISO timestamp or epoch milliseconds), not just a date`);
+  }
+
+  // Explicit offset/UTC: Date.parse is unambiguous.
+  if (/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(text)) {
+    const ms = Date.parse(text);
+    if (Number.isNaN(ms)) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
+    return ms;
+  }
+
+  // Naive ISO wall-clock: resolve it in the profile timezone.
+  const naive = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?$/,
+  );
+  if (!naive) fail(`${name} must be an ISO timestamp or epoch milliseconds`);
+  const [, year, month, dayText, hourText, minuteText, secondText, fraction] = naive;
+  const day = `${year}-${month}-${dayText}`;
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText ?? "0");
+  if (!isDay(day) || hour > 23 || minute > 59 || second > 59) {
+    fail(`${name} must be a valid local date and time`);
+  }
+  const millis = fraction ? Number(fraction.padEnd(3, "0").slice(0, 3)) : 0;
+  return localTimeMs(day, `${hourText}:${minuteText}:${String(second).padStart(2, "0")}`, timezone) + millis;
 }
 
 /** Body parsing shared by every API route: always JSON, never a surprise HTML error page. */

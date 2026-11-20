@@ -59,7 +59,7 @@ export function NutritionTrendChart({
             }
           />
           <ChartLegend content={<ChartLegendContent />} />
-          <Bar dataKey="kcal" fill="var(--color-kcal)" radius={[3, 3, 0, 0]} maxBarSize={28} />
+          <Bar dataKey="kcal" fill="var(--color-kcal)" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
           <Line
             dataKey="targetKcal"
             type="monotone"
@@ -67,6 +67,7 @@ export function NutritionTrendChart({
             strokeWidth={1.5}
             strokeDasharray="4 4"
             dot={false}
+            isAnimationActive={false}
           />
         </ComposedChart>
       </ChartContainer>

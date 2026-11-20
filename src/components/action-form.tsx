@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ActionState } from "@/lib/action-state";
@@ -39,18 +40,24 @@ export function ActionForm({
   children,
   resetOnSuccess = false,
   confirm,
+  confirmTitle,
+  confirmLabel,
   onSuccess,
 }: {
   action: ActionFn;
   className?: string;
   children: React.ReactNode;
   resetOnSuccess?: boolean;
-  /** Hard deletes have no undo, so the browser asks before the action runs. */
+  /** Hard deletes and destructive actions ask via a styled AlertDialog before running. */
   confirm?: string;
+  confirmTitle?: string;
+  confirmLabel?: string;
   /** Called once per successful result, so a parent can clear a sibling form's stale state. */
   onSuccess?: (state: ActionState) => void;
 }) {
   const [state, formAction] = useActionState<ActionState, FormData>(action, { ok: true });
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const confirmedRef = useRef(false);
   const ref = useRef<HTMLFormElement>(null);
   const handledState = useRef<ActionState | null>(null);
 
@@ -65,26 +72,47 @@ export function ActionForm({
   }, [state, onSuccess]);
 
   return (
-    <form
-      ref={ref}
-      action={formAction}
-      className={className}
-      onSubmit={(event) => {
-        if (confirm && !window.confirm(confirm)) event.preventDefault();
-      }}
-    >
-      {children}
-      {state.error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {state.error}
-        </p>
+    <>
+      <form
+        ref={ref}
+        action={formAction}
+        className={className}
+        onSubmit={(event) => {
+          if (confirm && !confirmedRef.current) {
+            event.preventDefault();
+            setConfirmOpen(true);
+            return;
+          }
+          confirmedRef.current = false;
+        }}
+      >
+        {children}
+        {state.error ? (
+          <p role="alert" className="text-xs text-destructive">
+            {state.error}
+          </p>
+        ) : null}
+        {state.ok && state.message ? (
+          <p role="status" className="text-xs text-muted-foreground">
+            {state.message}
+          </p>
+        ) : null}
+      </form>
+      {confirm ? (
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title={confirmTitle ?? "Confirm action"}
+          description={confirm}
+          confirmLabel={confirmLabel ?? "Continue"}
+          onConfirm={() => {
+            confirmedRef.current = true;
+            setConfirmOpen(false);
+            ref.current?.requestSubmit();
+          }}
+        />
       ) : null}
-      {state.ok && state.message ? (
-        <p role="status" className="text-xs text-muted-foreground">
-          {state.message}
-        </p>
-      ) : null}
-    </form>
+    </>
   );
 }
 

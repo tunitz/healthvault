@@ -38,6 +38,21 @@ export const AGENT_TOOLS = [
   "food_history_preview",
   "food_history_refresh",
   "recipe_list",
+  "training_block_get",
+  "training_block_start",
+  "training_session_status",
+  "strength_log",
+  "strength_history",
+  "strength_progression",
+  "strength_delete",
+  "whey_log",
+  "whey_undo",
+  "food_update",
+  "weekly_summary",
+  "five_k_progress",
+  "sleep_stages",
+  "supplement_adherence",
+  "recipe_preview",
 ] as const;
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];

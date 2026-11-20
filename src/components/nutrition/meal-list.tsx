@@ -588,9 +588,17 @@ export function MealList({
   onAddToMeal?: (meal: Meal) => void;
 }) {
   const totals = useMemo(() => {
-    const map = {} as Record<Meal, number>;
+    const map = {} as Record<Meal, { kcal: number; proteinG: number; carbsG: number; fatG: number }>;
     for (const { key } of MEALS) {
-      map[key] = meals[key].reduce((sum, entry) => sum + entry.kcal, 0);
+      map[key] = meals[key].reduce(
+        (acc, entry) => ({
+          kcal: acc.kcal + entry.kcal,
+          proteinG: acc.proteinG + entry.proteinG,
+          carbsG: acc.carbsG + entry.carbsG,
+          fatG: acc.fatG + entry.fatG,
+        }),
+        { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+      );
     }
     return map;
   }, [meals]);
@@ -599,12 +607,20 @@ export function MealList({
     <div className="grid items-start gap-4 md:grid-cols-2">
       {MEALS.map(({ key, label }) => {
         const entries = meals[key];
+        const t = totals[key];
         return (
           <section key={key} className="min-w-0 rounded-xl border border-border p-4" aria-labelledby={`meal-${key}`}>
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 id={`meal-${key}`} className="text-sm font-medium">{label}</h2>
-              <div className="flex items-center gap-2">
-                <span className="num text-xs text-muted-foreground">{num(totals[key], 0)} kcal</span>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 id={`meal-${key}`} className="text-sm font-medium">{label}</h2>
+                {entries.length > 0 ? (
+                  <p className="num text-[11px] text-muted-foreground">
+                    P {num(t.proteinG, 0)}g · C {num(t.carbsG, 0)}g · F {num(t.fatG, 0)}g
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="num text-xs text-muted-foreground">{num(t.kcal, 0)} kcal</span>
                 {onAddToMeal ? (
                   <Button
                     type="button"

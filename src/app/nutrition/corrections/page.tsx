@@ -73,6 +73,18 @@ export default async function CorrectionsPage(props: {
           aria-label="Search saved foods"
           className="h-11 w-full min-w-0 flex-1 sm:h-8 sm:max-w-xs sm:flex-none"
         />
+        {query ? (
+          <Button
+            asChild
+            variant="ghost"
+            size="icon-sm"
+            className="max-sm:size-11"
+            aria-label="Clear search"
+            title="Clear search"
+          >
+            <Link href={requestedFoodId ? `/nutrition/corrections?foodId=${requestedFoodId}` : "/nutrition/corrections"}>×</Link>
+          </Button>
+        ) : null}
         <Button type="submit" variant="outline" size="sm">
           Search
         </Button>

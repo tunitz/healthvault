@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { agentRequestFailure } from "@/lib/auth";
 import {
+  compactAgentContext,
+  compactDayNutrition,
+  compactFoodSearch,
+  compactProfile,
+  compactSupplementList,
+} from "@/lib/agent-format";
+import { sanitizeAgentNumbers } from "@/lib/round";
+import {
+  currentDay,
   healthvaultContext,
   metricsSeries,
 } from "@/lib/services/context";
@@ -26,6 +35,7 @@ import {
   searchFoods,
   setTargets,
   updateEntry,
+  updateFood,
 } from "@/lib/services/nutrition";
 import {
   applyHistoryRefresh,
@@ -36,6 +46,7 @@ import {
   deleteRecipe,
   getRecipe,
   listRecipes,
+  previewRecipeServing,
   updateRecipe,
 } from "@/lib/services/recipes";
 import { listFoodTemplates } from "@/lib/services/food-templates";
@@ -53,12 +64,30 @@ import {
   deleteSupplement,
   listSupplements,
   logSupplement,
+  logSupplementsBatch,
   supplementHistory,
   todayChecklist,
   updateSupplement,
+  weeklyAdherence,
 } from "@/lib/services/supplements";
-import { recentUploads, recordsForType, typeStats, workoutHistory } from "@/db/queries";
-import { currentDay } from "@/lib/services/context";
+import {
+  addStrengthSets,
+  deleteStrengthSet,
+  exerciseProgression,
+  listStrengthSessions,
+} from "@/lib/services/strength";
+import { MAX_WEEK_OFFSET, weeklySummary } from "@/lib/services/training";
+import { currentBlock, setSessionStatus, startBlock } from "@/lib/services/training-plan";
+import { logWhey, undoWhey } from "@/lib/services/whey";
+import {
+  fiveKAttempts,
+  pickBestFiveK,
+  recentUploads,
+  recordsForType,
+  sleepByDayStage,
+  typeStats,
+  workoutHistory,
+} from "@/db/queries";
 import { AGENT_TOOLS, type AgentTool } from "@/lib/agent-tools";
 import { mcpAccessFailure } from "@/lib/services/mcp";
 import { ValidationError, dayField, enumField, fail, numField, readJson, str } from "@/lib/validate";
@@ -72,6 +101,8 @@ const daysField = (value: unknown, fallback: number, max: number) =>
   numField(value ?? fallback, "days", { integer: true, min: 1, max }) ?? fallback;
 const limitField = (value: unknown, fallback: number, max: number) =>
   numField(value ?? fallback, "limit", { integer: true, min: 1, max }) ?? fallback;
+const offsetField = (value: unknown) =>
+  numField(value ?? 0, "offset", { integer: true, min: 0, max: 1_000_000 }) ?? 0;
 
 /**
  * Every handler receives the JSON body and returns a JSON-safe value. The agent plugin and the
@@ -79,56 +110,77 @@ const limitField = (value: unknown, fallback: number, max: number) =>
  */
 const TOOLS = {
   healthvault_context: (body: Record<string, unknown>) =>
-    healthvaultContext(Array.isArray(body.sections) ? body.sections : undefined),
+    compactAgentContext(
+      healthvaultContext(Array.isArray(body.sections) ? body.sections : undefined),
+      {
+        includeRawJson: body.includeRawJson === true,
+        includeIngredients: body.includeIngredients === true,
+      },
+    ),
 
-  profile_get: () => {
+  profile_get: (body: Record<string, unknown>) => {
     const profile = getProfile();
-    return {
-      profile,
+    return sanitizeAgentNumbers({
+      profile: compactProfile(profile, body.includeRawJson === true),
       workSchedule: workSchedule(profile),
       goal: trainingGoal(profile),
       wheyLink: parseWheyLink(profile),
       age: ageOf(profile, currentDay()),
       suggestedTargets: suggestedTargets(profile, latestMeasurement("weight")?.value ?? 75),
-    };
+    });
   },
-  profile_update: (body: Record<string, unknown>) => updateProfile(body),
+  profile_update: (body: Record<string, unknown>) => sanitizeAgentNumbers(updateProfile(body)),
 
-  measurement_add: (body: Record<string, unknown>) => addMeasurement(body),
+  measurement_add: (body: Record<string, unknown>) => sanitizeAgentNumbers(addMeasurement(body)),
   measurement_history: (body: Record<string, unknown>) =>
-    measurementHistory(
-      enumField(body.kind ?? "weight", "kind", KINDS, false) ?? "weight",
-      daysField(body.days, 365, 3650),
+    sanitizeAgentNumbers(
+      measurementHistory(
+        enumField(body.kind ?? "weight", "kind", KINDS, false) ?? "weight",
+        daysField(body.days, 365, 3650),
+      ),
     ),
 
   food_search: (body: Record<string, unknown>) =>
-    searchFoods(body.query, limitField(body.limit, 20, 100)),
-  food_add: (body: Record<string, unknown>) => addFood(body),
+    compactFoodSearch(searchFoods(body.query, limitField(body.limit, 20, 100), offsetField(body.offset))),
+  food_add: (body: Record<string, unknown>) => sanitizeAgentNumbers(addFood(body)),
+  food_update: (body: Record<string, unknown>) => sanitizeAgentNumbers(updateFood(body.id, body)),
 
-  meal_log: (body: Record<string, unknown>) => logMeal(body),
-  meal_update: (body: Record<string, unknown>) => updateEntry(body.id, body),
+  meal_log: (body: Record<string, unknown>) => sanitizeAgentNumbers(logMeal(body)),
+  meal_update: (body: Record<string, unknown>) => sanitizeAgentNumbers(updateEntry(body.id, body)),
   meal_delete: (body: Record<string, unknown>) => deleteEntry(body.id),
-  meal_get: (body: Record<string, unknown>) => getEntry(body.id),
+  meal_get: (body: Record<string, unknown>) => sanitizeAgentNumbers(getEntry(body.id)),
 
-  nutrition_day: (body: Record<string, unknown>) => dayNutrition(dayField(body.day, "day", currentDay())),
+  nutrition_day: (body: Record<string, unknown>) =>
+    compactDayNutrition(dayNutrition(dayField(body.day, "day", currentDay())), {
+      includeIngredients: body.includeIngredients === true,
+    }),
   nutrition_summary: (body: Record<string, unknown>) => {
     const days = daysField(body.days, 7, 366);
     const perDay = nutritionRange(
       days,
       body.endDay === undefined || body.endDay === "" ? undefined : dayField(body.endDay, "endDay"),
     );
-    return { days, targets: resolveTargets(currentDay()), perDay };
+    return sanitizeAgentNumbers({ days, targets: resolveTargets(currentDay()), perDay });
   },
 
-  nutrition_target_set: (body: Record<string, unknown>) => setTargets(body),
+  nutrition_target_set: (body: Record<string, unknown>) => sanitizeAgentNumbers(setTargets(body)),
 
-  supplement_list: () => ({ supplements: listSupplements(false), checklist: todayChecklist() }),
-  supplement_create: (body: Record<string, unknown>) => createSupplement(body),
-  supplement_update: (body: Record<string, unknown>) => updateSupplement(body.supplementId ?? body.id, body),
-  supplement_log: (body: Record<string, unknown>) => logSupplement(body),
+  supplement_list: () =>
+    compactSupplementList({ supplements: listSupplements(false), checklist: todayChecklist() }),
+  supplement_create: (body: Record<string, unknown>) => sanitizeAgentNumbers(createSupplement(body)),
+  supplement_update: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(updateSupplement(body.supplementId ?? body.id, body)),
+  supplement_log: (body: Record<string, unknown>) => {
+    if (Array.isArray(body.entries)) {
+      return sanitizeAgentNumbers(logSupplementsBatch(body.entries, body.day));
+    }
+    return sanitizeAgentNumbers(logSupplement(body));
+  },
 
-  metrics_series: (body: Record<string, unknown>) => metricsSeries(body.metric, daysField(body.days, 30, 730)),
-  workouts_recent: (body: Record<string, unknown>) => workoutHistory(limitField(body.limit, 10, 500)),
+  metrics_series: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(metricsSeries(body.metric, daysField(body.days, 30, 730))),
+  workouts_recent: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(workoutHistory(limitField(body.limit, 10, 500))),
 
   measurement_delete: (body: Record<string, unknown>) => {
     const result = deleteMeasurement(body.id);
@@ -143,28 +195,33 @@ const TOOLS = {
   copy_day: (body: Record<string, unknown>) =>
     copyDay(dayField(body.fromDay, "fromDay"), dayField(body.toDay, "toDay")),
 
-  record_types: () => typeStats(),
+  record_types: () => sanitizeAgentNumbers(typeStats()),
   records_recent: (body: Record<string, unknown>) => {
     const type = str(body.type, "type", { required: true, max: 200 })!;
-    return { type, rows: recordsForType(type, limitField(body.limit, 50, 500)) };
+    return sanitizeAgentNumbers({ type, rows: recordsForType(type, limitField(body.limit, 50, 500)) });
   },
   uploads_recent: (body: Record<string, unknown>) => recentUploads(limitField(body.limit, 50, 500)),
 
-  supplement_history: (body: Record<string, unknown>) => supplementHistory(daysField(body.days, 30, 366)),
+  supplement_history: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(supplementHistory(daysField(body.days, 30, 366))),
   supplement_delete: (body: Record<string, unknown>) => {
     const result = deleteSupplement(body.id);
     if (!result.deleted && !result.archived) fail("supplement not found", 404);
     return result;
   },
 
-  recipe_create: (body: Record<string, unknown>) => createRecipe(body),
-  // `limit` is passed through: `listRecipes` validates and caps it at 100, so an oversized value
-  // narrows to the cap instead of failing the call.
+  recipe_create: (body: Record<string, unknown>) => sanitizeAgentNumbers(createRecipe(body)),
   recipe_list: (body: Record<string, unknown>) =>
-    listRecipes({ query: body.query, limit: body.limit, includeArchived: body.includeArchived }),
-  recipe_get: (body: Record<string, unknown>) => getRecipe(body.id ?? body.recipeId),
-  recipe_log: (body: Record<string, unknown>) => logRecipe(body),
-  recipe_update: (body: Record<string, unknown>) => updateRecipe(body.id ?? body.recipeId, body),
+    listRecipes({
+      query: body.query,
+      limit: body.limit,
+      offset: body.offset,
+      includeArchived: body.includeArchived,
+    }),
+  recipe_get: (body: Record<string, unknown>) => sanitizeAgentNumbers(getRecipe(body.id ?? body.recipeId)),
+  recipe_log: (body: Record<string, unknown>) => sanitizeAgentNumbers(logRecipe(body)),
+  recipe_update: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(updateRecipe(body.id ?? body.recipeId, body)),
   recipe_delete: (body: Record<string, unknown>) => {
     const result = deleteRecipe(body.id ?? body.recipeId);
     if (!result.deleted && !result.archived) fail("recipe not found", 404);
@@ -173,10 +230,79 @@ const TOOLS = {
 
   food_template_list: () => ({ templates: listFoodTemplates() }),
   food_template_apply: (body: Record<string, unknown>) =>
-    applyFoodTemplate(body.id, body.template, { overwrite: body.overwrite === true }),
+    sanitizeAgentNumbers(applyFoodTemplate(body.id, body.template, { overwrite: body.overwrite === true })),
 
-  food_history_preview: (body: Record<string, unknown>) => previewHistoryRefresh(body),
-  food_history_refresh: (body: Record<string, unknown>) => applyHistoryRefresh(body),
+  food_history_preview: (body: Record<string, unknown>) => sanitizeAgentNumbers(previewHistoryRefresh(body)),
+  food_history_refresh: (body: Record<string, unknown>) => sanitizeAgentNumbers(applyHistoryRefresh(body)),
+
+  training_block_get: () => {
+    const block = currentBlock();
+    return sanitizeAgentNumbers(block ? { active: true, block } : { active: false, block: null });
+  },
+  training_block_start: (body: Record<string, unknown>) =>
+    startBlock(body.startDate, { includeStrength: body.includeStrength === true }),
+  training_session_status: (body: Record<string, unknown>) =>
+    setSessionStatus(body.id, body.status, body.workoutId),
+
+  strength_log: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers({
+      sets: addStrengthSets({
+        day: body.day,
+        exercise: body.exercise,
+        sets: body.sets,
+        note: body.note,
+        workoutId: body.workoutId,
+      }),
+    }),
+  strength_history: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(listStrengthSessions(daysField(body.days, 14, 366))),
+  strength_progression: (body: Record<string, unknown>) => {
+    const weeks = numField(body.weeks ?? 8, "weeks", { integer: true, min: 1, max: 52 }) ?? 8;
+    return sanitizeAgentNumbers({
+      exercise: str(body.exercise, "exercise", { required: true, max: 120 })!,
+      weeks: exerciseProgression(body.exercise, weeks),
+    });
+  },
+  strength_delete: (body: Record<string, unknown>) => {
+    const result = deleteStrengthSet(body.id);
+    if (!result.deleted) fail("strength set not found", 404);
+    return result;
+  },
+
+  whey_log: (body: Record<string, unknown>) =>
+    sanitizeAgentNumbers(
+      logWhey({
+        day: typeof body.day === "string" ? body.day : undefined,
+        eatenAt:
+          typeof body.eatenAt === "string" || typeof body.eatenAt === "number"
+            ? body.eatenAt
+            : undefined,
+      }),
+    ),
+  whey_undo: (body: Record<string, unknown>) =>
+    undoWhey({ day: typeof body.day === "string" ? body.day : undefined }),
+
+  weekly_summary: (body: Record<string, unknown>) => {
+    const weekOffset =
+      numField(body.weekOffset ?? 0, "weekOffset", { integer: true, min: 0, max: MAX_WEEK_OFFSET }) ?? 0;
+    return sanitizeAgentNumbers(weeklySummary(weekOffset));
+  },
+  five_k_progress: (body: Record<string, unknown>) => {
+    const days = daysField(body.days, 365, 3650);
+    const goal = trainingGoal(getProfile());
+    const attempts = fiveKAttempts(days);
+    const best = pickBestFiveK(attempts);
+    return sanitizeAgentNumbers({ days, goal, best, attempts });
+  },
+  sleep_stages: (body: Record<string, unknown>) => {
+    const days = daysField(body.days, 30, 365);
+    return sanitizeAgentNumbers({ days, nights: sleepByDayStage(days) });
+  },
+  supplement_adherence: (body: Record<string, unknown>) => {
+    const weeks = numField(body.weeks ?? 4, "weeks", { integer: true, min: 1, max: 52 }) ?? 4;
+    return sanitizeAgentNumbers({ weeks, supplements: weeklyAdherence(weeks) });
+  },
+  recipe_preview: (body: Record<string, unknown>) => sanitizeAgentNumbers(previewRecipeServing(body)),
 } satisfies Record<AgentTool, (body: Record<string, unknown>) => unknown>;
 
 /**

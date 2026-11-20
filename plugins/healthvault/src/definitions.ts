@@ -8,12 +8,14 @@
 
 import type {
   CopyDayInput,
+  FiveKProgressInput,
   FoodAddInput,
   FoodDeleteInput,
   FoodHistoryPreviewInput,
   FoodHistoryRefreshInput,
   FoodSearchInput,
   FoodTemplateApplyInput,
+  FoodUpdateInput,
   HealthContextInput,
   HealthVaultClient,
   MealDeleteInput,
@@ -33,14 +35,26 @@ import type {
   RecipeGetInput,
   RecipeListInput,
   RecipeLogInput,
+  RecipePreviewInput,
   RecipeUpdateInput,
   RecordsRecentInput,
+  SleepStagesInput,
+  StrengthDeleteInput,
+  StrengthHistoryInput,
+  StrengthLogInput,
+  StrengthProgressionInput,
+  SupplementAdherenceInput,
   SupplementCreateInput,
   SupplementDeleteInput,
   SupplementHistoryInput,
   SupplementLogInput,
   SupplementUpdateInput,
+  TrainingBlockStartInput,
+  TrainingSessionStatusInput,
   UploadsRecentInput,
+  WeeklySummaryInput,
+  WheyLogInput,
+  WheyUndoInput,
   WorkoutsRecentInput,
 } from "./client";
 
@@ -65,6 +79,132 @@ export const INSTRUCTIONS = [
 export interface ToolAnnotations {
   readonly readOnlyHint: boolean;
   readonly destructiveHint?: boolean;
+  readonly idempotentHint?: boolean;
+  readonly openWorldHint: false;
+}
+
+export interface ResourceDefinition {
+  readonly uri: string;
+  readonly name: string;
+  readonly description: string;
+  readonly mimeType: "application/json";
+  /** Underlying agent tool name + arguments used to materialize the resource. */
+  readonly tool: string;
+  readonly args: Record<string, unknown>;
+}
+
+export interface PromptDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly arguments?: readonly { name: string; description: string; required?: boolean }[];
+}
+
+export const MCP_RESOURCES: readonly ResourceDefinition[] = [
+  {
+    uri: "healthvault://context",
+    name: "HealthVault Context",
+    description: "Full compact HealthVault snapshot (profile, nutrition, weight, supplements, strength, training, freshness).",
+    mimeType: "application/json",
+    tool: "healthvault_context",
+    args: {},
+  },
+  {
+    uri: "healthvault://profile",
+    name: "User Profile",
+    description: "User profile, work schedule, 5K goal, whey link, age, and suggested macro targets.",
+    mimeType: "application/json",
+    tool: "profile_get",
+    args: {},
+  },
+  {
+    uri: "healthvault://nutrition/today",
+    name: "Today's Nutrition",
+    description: "Today's logged meals, totals, targets, remaining macros, and estimated share.",
+    mimeType: "application/json",
+    tool: "nutrition_day",
+    args: {},
+  },
+  {
+    uri: "healthvault://training/block",
+    name: "Active Training Block",
+    description: "Current 16-week 5K training block progress and this week's planned sessions.",
+    mimeType: "application/json",
+    tool: "training_block_get",
+    args: {},
+  },
+];
+
+export const MCP_PROMPTS: readonly PromptDefinition[] = [
+  {
+    name: "daily_checkin",
+    description: "Review today's nutrition, weight trend, supplements, and training readiness.",
+    arguments: [{ name: "day", description: "Optional YYYY-MM-DD local day (defaults to today).", required: false }],
+  },
+  {
+    name: "weekly_training_review",
+    description: "Review weekly running volume, 5K progression, strength sets, sleep, and training block adherence.",
+    arguments: [{ name: "weekOffset", description: "Weeks back from current week (0-8, default 0).", required: false }],
+  },
+  {
+    name: "meal_audit",
+    description: "Audit a day's logged meals, macro targets, and estimated calorie share.",
+    arguments: [{ name: "day", description: "Optional YYYY-MM-DD local day (defaults to today).", required: false }],
+  },
+];
+
+export function buildPromptMessages(
+  name: string,
+  args: Record<string, string | undefined> = {},
+): { description: string; messages: { role: "user"; content: { type: "text"; text: string } }[] } | null {
+  const prompt = MCP_PROMPTS.find((p) => p.name === name);
+  if (!prompt) return null;
+  if (name === "daily_checkin") {
+    const dayClause = args.day ? ` for ${args.day}` : " for today";
+    return {
+      description: prompt.description,
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Run a concise daily HealthVault check-in${dayClause}. Call healthvault_context (or healthvault_nutrition_day if checking a past day) to inspect nutrition totals vs targets, due supplements, weight trend, and any planned training session, then highlight actionable next steps without inventing missing numbers.`,
+          },
+        },
+      ],
+    };
+  }
+  if (name === "weekly_training_review") {
+    const offset = args.weekOffset ? Number(args.weekOffset) : 0;
+    const weekClause = Number.isInteger(offset) && offset > 0 ? ` for weekOffset=${offset}` : " for the current week";
+    return {
+      description: prompt.description,
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Perform a HealthVault weekly training review${weekClause}. Call healthvault_weekly_summary, healthvault_five_k_progress, and healthvault_training_block_get. Summarize running volume, best pace vs 5K goal, strength sets, sleep, resting HR, and flag if Apple Health data is stale.`,
+          },
+        },
+      ],
+    };
+  }
+  if (name === "meal_audit") {
+    const dayClause = args.day ? ` on ${args.day}` : " for today";
+    return {
+      description: prompt.description,
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Audit the logged meals${dayClause}. Call healthvault_nutrition_day${args.day ? ` with day="${args.day}"` : ""} and inspect meals, remaining macros, protein/fibre/sodium progress, and estimatedKcalShare. Call healthvault_meal_get only if full per-ingredient provenance is needed for a recipe entry.`,
+          },
+        },
+      ],
+    };
+  }
+  return null;
 }
 
 export interface ToolDefinition {
@@ -149,12 +289,14 @@ const INGREDIENT_OVERRIDE_SCHEMA = {
 const HISTORY_SCOPE_PROPS = {
   foodIds: {
     type: "array",
+    minItems: 1,
     maxItems: 200,
     items: { type: "integer", minimum: 1 },
     description: "Saved food ids to correct. At least one of foodIds or entryIds is required.",
   },
   entryIds: {
     type: "array",
+    minItems: 1,
     maxItems: 500,
     items: { type: "integer", minimum: 1 },
     description: "Logged entry ids to correct, including all their ingredient snapshots.",
@@ -284,15 +426,21 @@ function defineTool<Input>(definition: {
   readOnly?: boolean;
   /** True for tools whose call permanently removes data. */
   destructive?: boolean;
+  /** True when repeating the exact call has the same effect. */
+  idempotent?: boolean;
   run: (input: Input, signal: AbortSignal) => Promise<unknown>;
 }): ToolDefinition {
+  const isReadOnly = definition.readOnly === true;
   return {
     name: definition.name,
     description: definition.description,
     inputSchema: definition.input,
-    annotations: definition.destructive
-      ? { readOnlyHint: false, destructiveHint: true }
-      : { readOnlyHint: definition.readOnly === true },
+    annotations: {
+      readOnlyHint: isReadOnly,
+      ...(definition.destructive ? { destructiveHint: true } : {}),
+      ...(definition.idempotent ?? isReadOnly ? { idempotentHint: true } : {}),
+      openWorldHint: false,
+    },
     run: (input, signal) => definition.run(input as Input, signal),
   };
 }
@@ -321,7 +469,9 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<ProfileUpdateInput>({
       name: "healthvault_profile_update",
-      description: "Update only the supplied profile fields; null or an empty string clears a field.",
+      description:
+        "Update only the supplied profile fields; null or an empty string clears a field. Work schedule weekdays use 0 = Sun .. 6 = Sat.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
@@ -343,7 +493,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
                 items: {
                   type: "object",
                   properties: {
-                    weekday: { type: "integer", minimum: 0, maximum: 6 },
+                    weekday: { type: "integer", minimum: 0, maximum: 6, description: "0 = Sun .. 6 = Sat" },
                     start: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
                     end: { type: "string", pattern: "^\\d{2}:\\d{2}$" },
                   },
@@ -387,15 +537,23 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MeasurementAddInput>({
       name: "healthvault_measurement_add",
-      description: "Record a manual body measurement, merged with Apple weight on read.",
+      description:
+        "Record a manual body measurement, merged with Apple weight on read. Valid ranges: weight 20–400 kg (units kg/lb), bodyFat 1–75 %, waist 20–300 cm (units cm/in).",
       input: {
         type: "object",
         properties: {
           kind: KIND_SCHEMA,
           value: { type: "number", minimum: 0 },
-          unit: { type: "string" },
+          unit: {
+            type: "string",
+            enum: ["kg", "lb", "lbs", "%", "percent", "cm", "in", "inch"],
+            description: "Defaults to kg (weight), % (bodyFat), or cm (waist).",
+          },
           day: DAY_SCHEMA,
-          takenAt: { type: ["string", "number"] },
+          takenAt: {
+            type: ["string", "number"],
+            description: "ISO timestamp (naive resolved in profile timezone) or epoch ms.",
+          },
           note: { type: "string", maxLength: 1000 },
         },
         required: ["kind", "value"],
@@ -411,7 +569,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
         type: "object",
         properties: {
           kind: KIND_SCHEMA,
-          days: { type: "integer", minimum: 1 },
+          days: { type: "integer", minimum: 1, maximum: 3650 },
         },
         additionalProperties: false,
       },
@@ -421,12 +579,13 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodSearchInput>({
       name: "healthvault_food_search",
-      description: "Find reusable foods by name or brand.",
+      description: "Find reusable foods by name or brand; supports limit/offset pagination.",
       input: {
         type: "object",
         properties: {
           query: { type: "string", maxLength: 120 },
           limit: { type: "integer", minimum: 1, maximum: 100 },
+          offset: { type: "integer", minimum: 0, maximum: 1000000 },
         },
         additionalProperties: false,
       },
@@ -436,7 +595,9 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<FoodAddInput>({
       name: "healthvault_food_add",
-      description: "Create or update a reusable food with per-100 g nutrition; never invent values.",
+      description:
+        "Create or upsert a reusable food by (name, brand) with per-100 g nutrition; never invent values. To rename or rebrand an existing food by id without creating a duplicate, use healthvault_food_update.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
@@ -464,7 +625,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealLogInput>({
       name: "healthvault_meal_log",
-      description: "Log one or more foods or a recipe serving into a meal.",
+      description: "Log one or more foods into a meal. For composite dishes, use healthvault_recipe_log.",
       input: {
         type: "object",
         properties: {
@@ -486,7 +647,9 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<MealUpdateInput>({
       name: "healthvault_meal_update",
-      description: "Change an already logged meal entry.",
+      description:
+        "Change an already logged meal entry. Recipe snapshots only rescale via servingFraction (sending grams or macros on a recipe entry returns 409); moving onto an occupied (day, meal, eatenAt, name) slot returns 409.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
@@ -534,10 +697,14 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<NutritionDayInput>({
       name: "healthvault_nutrition_day",
-      description: "Read one day's meals, totals, targets and remaining macros.",
+      description:
+        "Read one day's meals, totals, targets and remaining macros. Recipe ingredients are returned in compact summary form by default; pass includeIngredients: true or call healthvault_meal_get for full 29-column snapshots.",
       input: {
         type: "object",
-        properties: { day: DAY_SCHEMA },
+        properties: {
+          day: DAY_SCHEMA,
+          includeIngredients: { type: "boolean" },
+        },
         additionalProperties: false,
       },
       readOnly: true,
@@ -588,7 +755,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementCreateInput>({
       name: "healthvault_supplement_create",
-      description: "Create a supplement regimen.",
+      description: "Create a supplement regimen. Schedule days use 0 = Sun .. 6 = Sat (null = daily).",
       input: {
         type: "object",
         properties: {
@@ -602,6 +769,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
               days: {
                 type: ["array", "null"],
                 items: { type: "integer", minimum: 0, maximum: 6 },
+                description: "0 = Sun .. 6 = Sat; null means every day.",
               },
               note: { type: "string" },
             },
@@ -619,7 +787,9 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementUpdateInput>({
       name: "healthvault_supplement_update",
-      description: "Change an existing supplement regimen; only supplied fields change.",
+      description:
+        "Change an existing supplement regimen; only supplied fields change. Schedule days use 0 = Sun .. 6 = Sat.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
@@ -634,6 +804,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
               days: {
                 type: ["array", "null"],
                 items: { type: "integer", minimum: 0, maximum: 6 },
+                description: "0 = Sun .. 6 = Sat; null means every day.",
               },
               note: { type: "string" },
             },
@@ -651,7 +822,9 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<SupplementLogInput>({
       name: "healthvault_supplement_log",
-      description: "Mark a supplement taken or untaken for a day.",
+      description:
+        "Mark one supplement taken/untaken for a day, or pass `entries` (up to 50) to log a full stack atomically in one call.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
@@ -660,10 +833,32 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
           taken: { type: "boolean" },
           dose: { type: "number", minimum: 0.01, maximum: 10000 },
           unit: { type: "string", maxLength: 40 },
-          takenAt: { type: ["string", "number"] },
+          takenAt: {
+            type: ["string", "number"],
+            description: "ISO timestamp (naive resolved in profile timezone) or epoch ms.",
+          },
           note: { type: "string", maxLength: 1000 },
+          entries: {
+            type: "array",
+            minItems: 1,
+            maxItems: 50,
+            description: "Batch mode: log multiple supplements in one atomic transaction.",
+            items: {
+              type: "object",
+              properties: {
+                supplementId: { type: "integer", minimum: 1 },
+                day: DAY_SCHEMA,
+                taken: { type: "boolean" },
+                dose: { type: "number", minimum: 0.01, maximum: 10000 },
+                unit: { type: "string", maxLength: 40 },
+                takenAt: { type: ["string", "number"] },
+                note: { type: "string", maxLength: 1000 },
+              },
+              required: ["supplementId"],
+              additionalProperties: false,
+            },
+          },
         },
-        required: ["supplementId"],
         additionalProperties: false,
       },
       run: (input, signal) => client.supplementLog(input, signal),
@@ -702,7 +897,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
       input: {
         type: "object",
         properties: {
-          limit: { type: "integer", minimum: 1 },
+          limit: { type: "integer", minimum: 1, maximum: 500 },
         },
         additionalProperties: false,
       },
@@ -959,11 +1154,28 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
     defineTool<FoodTemplateApplyInput>({
       name: "healthvault_food_template_apply",
       description: "Apply one named template to a saved food id.",
+      idempotent: true,
       input: {
         type: "object",
         properties: {
           id: { type: "integer", minimum: 1 },
-          template: { type: "string", minLength: 1, maxLength: 80 },
+          template: {
+            type: "string",
+            enum: [
+              "honey",
+              "nescafe-gold",
+              "jumbo-egg",
+              "kfc-fry",
+              "active-whey",
+              "chicken-breast-skinless",
+              "chicken-thigh-skinless",
+              "ground-beef",
+              "white-rice-dry",
+              "dried-pulses-dry",
+              "pasta-dry",
+              "oats-dry",
+            ],
+          },
           overwrite: { type: "boolean" },
         },
         required: ["id", "template"],
@@ -1021,18 +1233,304 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
 
     defineTool<RecipeListInput>({
       name: "healthvault_recipe_list",
-      description: "List saved recipes without loading their ingredients.",
+      description: "List saved recipes without loading their ingredients; supports limit/offset pagination.",
       input: {
         type: "object",
         properties: {
           query: { type: "string", maxLength: 120 },
           limit: { type: "integer", minimum: 1, maximum: 100 },
+          offset: { type: "integer", minimum: 0, maximum: 1000000 },
           includeArchived: { type: "boolean" },
         },
         additionalProperties: false,
       },
       readOnly: true,
       run: (input, signal) => client.recipeList(input, signal),
+    }),
+
+    defineTool<Record<string, never>>({
+      name: "healthvault_training_block_get",
+      description: "Read the current 16-week 5K training block, weekly completion counts, and planned sessions.",
+      input: NO_INPUT,
+      readOnly: true,
+      run: (_input, signal) => client.trainingBlockGet(signal),
+    }),
+
+    defineTool<TrainingBlockStartInput>({
+      name: "healthvault_training_block_start",
+      description: "Start a new 16-week 5K training block beginning on a Monday (YYYY-MM-DD). Returns 409 if an active block still has planned sessions.",
+      input: {
+        type: "object",
+        properties: {
+          startDate: { ...DAY_SCHEMA, description: "Monday YYYY-MM-DD start date." },
+          includeStrength: { type: "boolean", description: "Include optional Tue/Fri strength sessions." },
+        },
+        required: ["startDate"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.trainingBlockStart(input, signal),
+    }),
+
+    defineTool<TrainingSessionStatusInput>({
+      name: "healthvault_training_session_status",
+      description: "Mark a planned training block session as planned, done, or skipped, optionally linking a same-day imported workoutId.",
+      idempotent: true,
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          status: { type: "string", enum: ["planned", "done", "skipped"] },
+          workoutId: { type: ["integer", "null"], minimum: 1 },
+        },
+        required: ["id", "status"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.trainingSessionStatus(input, signal),
+    }),
+
+    defineTool<StrengthLogInput>({
+      name: "healthvault_strength_log",
+      description: "Append strength sets for one exercise on a day (manual detail only; never adds workout calories).",
+      input: {
+        type: "object",
+        properties: {
+          day: DAY_SCHEMA,
+          exercise: { type: "string", minLength: 1, maxLength: 120 },
+          sets: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: "object",
+              properties: {
+                reps: { type: "number", minimum: 0, maximum: 1000 },
+                loadKg: { type: "number", minimum: 0, maximum: 1000 },
+              },
+              additionalProperties: false,
+            },
+          },
+          note: { type: "string", maxLength: 1000 },
+          workoutId: { type: "integer", minimum: 1 },
+        },
+        required: ["exercise", "sets"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.strengthLog(input, signal),
+    }),
+
+    defineTool<StrengthHistoryInput>({
+      name: "healthvault_strength_history",
+      description: "Read recent manual strength sessions grouped by day and exercise.",
+      input: {
+        type: "object",
+        properties: {
+          days: { type: "integer", minimum: 1, maximum: 366 },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.strengthHistory(input, signal),
+    }),
+
+    defineTool<StrengthProgressionInput>({
+      name: "healthvault_strength_progression",
+      description: "Read weekly top-load and volume progression for one strength exercise.",
+      input: {
+        type: "object",
+        properties: {
+          exercise: { type: "string", minLength: 1, maxLength: 120 },
+          weeks: { type: "integer", minimum: 1, maximum: 52 },
+        },
+        required: ["exercise"],
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.strengthProgression(input, signal),
+    }),
+
+    defineTool<StrengthDeleteInput>({
+      name: "healthvault_strength_delete",
+      description: "Permanently delete a manual strength set by id; confirm with the user first.",
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      destructive: true,
+      run: (input, signal) => client.strengthDelete(input, signal),
+    }),
+
+    defineTool<WheyLogInput>({
+      name: "healthvault_whey_log",
+      description: "Log the configured one-tap whey serving and mark its linked supplement atomically (409 if already logged that day).",
+      input: {
+        type: "object",
+        properties: {
+          day: DAY_SCHEMA,
+          eatenAt: { type: ["string", "number"] },
+        },
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.wheyLog(input, signal),
+    }),
+
+    defineTool<WheyUndoInput>({
+      name: "healthvault_whey_undo",
+      description: "Undo the one-tap whey action for a day, restoring any prior supplement log state.",
+      idempotent: true,
+      input: {
+        type: "object",
+        properties: {
+          day: DAY_SCHEMA,
+        },
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.wheyUndo(input, signal),
+    }),
+
+    defineTool<FoodUpdateInput>({
+      name: "healthvault_food_update",
+      description: "Update a saved food by id (rename, rebrand, barcode, macros, state, yieldFactor, measures, or source metadata without creating duplicates).",
+      idempotent: true,
+      input: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          name: { type: "string", maxLength: 200 },
+          brand: { type: ["string", "null"], maxLength: 200 },
+          barcode: { type: ["string", "null"], maxLength: 64 },
+          servingGrams: { type: "number", minimum: 1, maximum: 10000 },
+          per100g: {
+            type: "object",
+            properties: {
+              kcal: { type: "number", minimum: 0 },
+              proteinG: { type: "number", minimum: 0 },
+              carbsG: { type: "number", minimum: 0 },
+              fatG: { type: "number", minimum: 0 },
+              fibreG: { type: "number", minimum: 0 },
+              sodiumMg: { type: "number", minimum: 0 },
+            },
+            additionalProperties: false,
+          },
+          state: { type: "string", enum: ["raw", "cooked", "dry", "rehydrated", "none"] },
+          yieldFactor: { type: "number", minimum: 0.01, maximum: 10 },
+          measures: {
+            type: ["object", "null"],
+            additionalProperties: { type: "number", minimum: 0.01 },
+          },
+          extra: {},
+          source: { type: "string" },
+          sourceUrl: { type: ["string", "null"], maxLength: 500 },
+          sourceDate: { type: ["string", "null"], pattern: DAY_PATTERN },
+        },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      run: (input, signal) => client.foodUpdate(input, signal),
+    }),
+
+    defineTool<WeeklySummaryInput>({
+      name: "healthvault_weekly_summary",
+      description: "Read a Sunday-start weekly training and recovery summary (weekOffset 0 = current week, up to 8 weeks back).",
+      input: {
+        type: "object",
+        properties: {
+          weekOffset: { type: "integer", minimum: 0, maximum: 8 },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.weeklySummary(input, signal),
+    }),
+
+    defineTool<FiveKProgressInput>({
+      name: "healthvault_five_k_progress",
+      description: "Read the 5K goal, best qualifying 5K attempt, and chronological 5K attempts (4.9–5.5 km).",
+      input: {
+        type: "object",
+        properties: {
+          days: { type: "integer", minimum: 1, maximum: 3650 },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.fiveKProgress(input, signal),
+    }),
+
+    defineTool<SleepStagesInput>({
+      name: "healthvault_sleep_stages",
+      description: "Read nightly single-source sleep stage breakdowns (REM, deep, core, awake, in-bed hours).",
+      input: {
+        type: "object",
+        properties: {
+          days: { type: "integer", minimum: 1, maximum: 365 },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.sleepStages(input, signal),
+    }),
+
+    defineTool<SupplementAdherenceInput>({
+      name: "healthvault_supplement_adherence",
+      description: "Read per-supplement weekly adherence across Sunday-start weeks.",
+      input: {
+        type: "object",
+        properties: {
+          weeks: { type: "integer", minimum: 1, maximum: 52 },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.supplementAdherence(input, signal),
+    }),
+
+    defineTool<RecipePreviewInput>({
+      name: "healthvault_recipe_preview",
+      description: "Read-only serving/batch macro preview for a saved recipeId or an unsaved draft, with optional overrides.",
+      input: {
+        type: "object",
+        properties: {
+          recipeId: { type: "integer", minimum: 1 },
+          draft: {
+            type: "object",
+            properties: {
+              name: { type: "string", maxLength: 200 },
+              servings: { type: "integer", minimum: 1, maximum: 100 },
+              ingredients: {
+                type: "array",
+                minItems: 1,
+                maxItems: 100,
+                items: {
+                  type: "object",
+                  properties: {
+                    foodId: { type: "integer", minimum: 1 },
+                    name: { type: "string", maxLength: 200 },
+                    grams: { type: "number", minimum: 0.1 },
+                    measure: MEASURE_SCHEMA,
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["ingredients"],
+            additionalProperties: false,
+          },
+          servingFraction: { type: "number", minimum: 0.01, maximum: 100 },
+          amountBasis: { type: "string", enum: ["batch", "serving"] },
+          ingredientOverrides: {
+            type: "array",
+            maxItems: 100,
+            items: INGREDIENT_OVERRIDE_SCHEMA,
+          },
+        },
+        additionalProperties: false,
+      },
+      readOnly: true,
+      run: (input, signal) => client.recipePreview(input, signal),
     }),
   ];
 }

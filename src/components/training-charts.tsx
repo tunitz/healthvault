@@ -4,16 +4,30 @@ import {
   Area, AreaChart, Bar, CartesianGrid, ComposedChart, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { compact, num, r2 } from "@/lib/format";
+import { compact, formatSeconds, num, r2 } from "@/lib/format";
 import {
   distanceUnit,
   formatDistance,
+  formatPace,
   formatPaceClock,
   paceUnitLabel,
   toDisplayDistance,
   toDisplayPace,
   type Units,
 } from "@/lib/units";
+
+function cleanPaceTicks(minVal: number, maxVal: number): number[] {
+  const span = Math.max(0.5, maxVal - minVal);
+  const step = span > 8 ? 2 : span > 4 ? 1 : 0.5;
+  const start = Math.max(0, Math.floor(minVal / step) * step);
+  const end = Math.ceil(maxVal / step) * step;
+  const ticks: number[] = [];
+  for (let v = start; v <= end + 1e-6; v += step) {
+    ticks.push(Number(v.toFixed(2)));
+    if (ticks.length >= 10) break;
+  }
+  return ticks;
+}
 
 /**
  * Training visuals. Colours come from the theme chart tokens (--chart-1..5) and the neutral
@@ -112,7 +126,7 @@ export function StepsChart({ data }: { data: { day: string; value: number; sourc
               strokeDasharray="4 4"
               label={{ value: `avg ${compact(avg)}`, fill: C.ref, fontSize: 11, position: "insideTopRight" }}
             />
-            <Area dataKey="value" name="steps" type="monotone" stroke={C.steps} strokeWidth={2} fill="url(#gSteps)" />
+            <Area dataKey="value" name="steps" type="monotone" stroke={C.steps} strokeWidth={2} fill="url(#gSteps)" isAnimationActive={false} />
           </AreaChart>
         </Chart>
       )}
@@ -165,8 +179,9 @@ export function WeeklyVolumeChart({ data, units }: {
               maxBarSize={28}
               minPointSize={3}
               fillOpacity={0.85}
+              isAnimationActive={false}
             />
-            <Line yAxisId="km" dataKey="km" name={distanceUnit(units)} type="monotone" stroke={C.distance} strokeWidth={2} dot={{ r: 2.5 }} />
+            <Line yAxisId="km" dataKey="km" name={distanceUnit(units)} type="monotone" stroke={C.distance} strokeWidth={2} dot={{ r: 2.5 }} isAnimationActive={false} />
           </ComposedChart>
         </Chart>
       )}
@@ -178,13 +193,17 @@ export function PaceTrendChart({ data, units }: { data: { day: string; paceMinPe
   const points = data
     .filter((d) => d.paceMinPerKm !== null)
     .map((d) => ({ ...d, paceMinPerKm: toDisplayPace(d.paceMinPerKm!, units) }));
+  const paces = points.map((p) => p.paceMinPerKm);
+  const paceTicks = paces.length ? cleanPaceTicks(Math.min(...paces), Math.max(...paces)) : undefined;
+  const paceDomain: [number, number] | ["auto", "auto"] =
+    paceTicks && paceTicks.length >= 2 ? [paceTicks[0], paceTicks[paceTicks.length - 1]] : ["auto", "auto"];
   return (
     <Section
       title="Run pace"
       description={`Minutes per ${units === "imperial" ? "mile" : "km"} — lower is faster`}
       summary={
         points.length
-          ? `Latest ${num(points[points.length - 1].paceMinPerKm, 2)} ${paceUnitLabel(units)} across ${points.length} runs.`
+          ? `Latest ${formatSeconds(points[points.length - 1].paceMinPerKm * 60)} ${paceUnitLabel(units)} across ${points.length} runs.`
           : undefined
       }
     >
@@ -193,9 +212,9 @@ export function PaceTrendChart({ data, units }: { data: { day: string; paceMinPe
           <LineChart data={points} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid vertical={false} stroke={C.grid} />
             <XAxis dataKey="day" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
-            <YAxis width={44} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => r2(v)} />
-            <Tooltip {...tip} formatter={(v) => [`${Number(v).toFixed(2)} ${paceUnitLabel(units)}`, "pace"]} />
-            <Line dataKey="paceMinPerKm" name={paceUnitLabel(units)} type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
+            <YAxis width={44} {...axis} domain={paceDomain} ticks={paceTicks} tickFormatter={(v: number) => formatSeconds(v * 60)} />
+            <Tooltip {...tip} formatter={(v) => [`${formatSeconds(Number(v) * 60)} ${paceUnitLabel(units)}`, "pace"]} />
+            <Line dataKey="paceMinPerKm" name={paceUnitLabel(units)} type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} isAnimationActive={false} />
           </LineChart>
         </Chart>
       )}
@@ -221,14 +240,16 @@ export function PaceGoalChart({ attempts, goalPaceMinPerKm, units }: {
   const paces = points.map((point) => point.pace);
   const lo = Math.min(...paces, goal);
   const hi = Math.max(...paces, goal);
-  const pad = Math.max(0.25, (hi - lo) * 0.1);
+  const ticks = cleanPaceTicks(lo, hi);
+  const domainMin = ticks.length ? ticks[0] : Math.max(0, lo - 0.5);
+  const domainMax = ticks.length ? ticks[ticks.length - 1] : hi + 0.5;
   const best = paces.length ? Math.min(...paces) : null;
 
   return (
     <Section
       title="5K attempt pace"
       description={`Minutes per ${units === "imperial" ? "mile" : "km"} — lower is faster; the dashed line is the goal`}
-      summary={best === null ? undefined : `Best ${num(best, 2)} ${paceUnitLabel(units)} across ${points.length} ${points.length === 1 ? "attempt" : "attempts"}.`}
+      summary={best === null ? undefined : `Best ${formatPace(best, "metric").replace("/km", paceUnitLabel(units))} across ${points.length} ${points.length === 1 ? "attempt" : "attempts"}.`}
     >
       {points.length === 0 ? <Empty>No 5 km attempts in the last year</Empty> : (
         <Chart label={`5K attempt pace chart with a goal line at ${formatPaceClock(goalPaceMinPerKm, units)}`}>
@@ -238,13 +259,14 @@ export function PaceGoalChart({ attempts, goalPaceMinPerKm, units }: {
             <YAxis
               width={44}
               {...axis}
-              domain={[Math.max(0, lo - pad), hi + pad]}
-              tickFormatter={(v: number) => r2(v)}
+              domain={[domainMin, domainMax]}
+              ticks={ticks}
+              tickFormatter={(v: number) => formatSeconds(v * 60)}
             />
             <Tooltip
               {...tip}
               formatter={(v, name) => [
-                name === "pace" ? `${r2(Number(v))} ${paceUnitLabel(units)}` : formatDistance(Number(v), units, 2),
+                name === "pace" ? `${formatSeconds(Number(v) * 60)} ${paceUnitLabel(units)}` : formatDistance(Number(v), units, 2),
                 name === "pace" ? "pace" : "distance",
               ]}
             />
@@ -254,7 +276,7 @@ export function PaceGoalChart({ attempts, goalPaceMinPerKm, units }: {
               strokeDasharray="4 4"
               label={{ value: `goal ${formatPaceClock(goalPaceMinPerKm, units)}`, fill: C.ref, fontSize: 11, position: "insideTopRight" }}
             />
-            <Line dataKey="pace" name="pace" type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} />
+            <Line dataKey="pace" name="pace" type="monotone" stroke={C.pace} strokeWidth={2} dot={{ r: 2.5, fill: C.pace }} activeDot={{ r: 4 }} isAnimationActive={false} />
           </LineChart>
         </Chart>
       )}
@@ -286,8 +308,8 @@ export function WorkoutHrChart({ data }: { data: { day: string; avgHr: number | 
             <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} bpm ${name === "max" ? "(peak)" : "(avg)"}`, name]} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <ReferenceLine y={avg} stroke={C.ref} strokeDasharray="4 4" />
-            <Area dataKey="maxHr" name="max" type="monotone" stroke={C.hr} strokeWidth={1.5} fill="url(#gMaxHr)" />
-            <Line dataKey="avgHr" name="avg" type="monotone" stroke={C.hr} strokeWidth={2} dot={{ r: 2.5 }} />
+            <Area dataKey="maxHr" name="max" type="monotone" stroke={C.hr} strokeWidth={1.5} fill="url(#gMaxHr)" isAnimationActive={false} />
+            <Line dataKey="avgHr" name="avg" type="monotone" stroke={C.hr} strokeWidth={2} dot={{ r: 2.5 }} isAnimationActive={false} />
           </ComposedChart>
         </Chart>
       )}
@@ -324,8 +346,8 @@ export function FitnessTrendChart({ resting, vo2 }: {
             <YAxis yAxisId="vo2" orientation="right" width={36} {...axis} domain={["auto", "auto"]} tickFormatter={(v: number) => v.toFixed(0)} />
             <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} ${name === "VO2max" ? "ml/kg/min" : "bpm"}`, name]} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Line yAxisId="hr" dataKey="resting" name="resting HR" type="monotone" stroke={C.resting} strokeWidth={2} dot={false} connectNulls />
-            <Line yAxisId="vo2" dataKey="vo2" name="VO2max" type="monotone" stroke={C.vo2} strokeWidth={2} dot={false} connectNulls />
+            <Line yAxisId="hr" dataKey="resting" name="resting HR" type="monotone" stroke={C.resting} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+            <Line yAxisId="vo2" dataKey="vo2" name="VO2max" type="monotone" stroke={C.vo2} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
         </Chart>
       )}
@@ -354,7 +376,7 @@ export function HeartRateDailyChart({ data }: { data: { day: string; value: numb
             <XAxis dataKey="day" {...axis} {...xTicks} tickFormatter={(v: string) => v.slice(5)} />
             <YAxis width={40} {...axis} domain={["auto", "auto"]} />
             <Tooltip {...tip} formatter={(v, name) => [`${r2(Number(v))} bpm`, name]} />
-            <Area dataKey="value" name="bpm" type="monotone" stroke={C.hr} strokeWidth={2} fill="url(#gHr)" />
+            <Area dataKey="value" name="bpm" type="monotone" stroke={C.hr} strokeWidth={2} fill="url(#gHr)" isAnimationActive={false} />
           </AreaChart>
         </Chart>
       )}

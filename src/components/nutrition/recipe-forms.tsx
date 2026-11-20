@@ -21,6 +21,7 @@ import {
   searchRecipeFoodsAction,
 } from "@/app/actions";
 import { Field, SubmitButton } from "@/components/action-form";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -849,6 +850,9 @@ export function DeleteRecipeForm({
   const [state, formAction] = useActionState<RecipeDeleteState, FormData>(deleteRecipeAction, {
     ok: true,
   });
+  const [open, setOpen] = useState(false);
+  const confirmedRef = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!state.ok || !state.message) return;
@@ -871,25 +875,45 @@ export function DeleteRecipeForm({
   const confirm = `Delete "${name}"? If it has logged history it will be archived instead of deleted, and logged meals stay intact. An unreferenced recipe is permanently deleted.`;
 
   return (
-    <form
-      action={formAction}
-      onSubmit={(event) => {
-        if (!window.confirm(confirm)) event.preventDefault();
-      }}
-    >
-      <input type="hidden" name="id" value={id} />
-      {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
-      <SubmitButton
-        variant="ghost"
-        size="icon-sm"
-        className="max-sm:size-11"
-        aria-label={`Delete ${name}`}
-        title={`Delete ${name}`}
-        pendingLabel={<span className="sr-only">Deleting</span>}
+    <>
+      <form
+        ref={formRef}
+        action={formAction}
+        onSubmit={(event) => {
+          if (!confirmedRef.current) {
+            event.preventDefault();
+            setOpen(true);
+            return;
+          }
+          confirmedRef.current = false;
+        }}
       >
-        <Trash2 aria-hidden />
-      </SubmitButton>
-    </form>
+        <input type="hidden" name="id" value={id} />
+        {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
+        <SubmitButton
+          variant="ghost"
+          size="icon-sm"
+          className="max-sm:size-11"
+          aria-label={`Delete ${name}`}
+          title={`Delete ${name}`}
+          pendingLabel={<span className="sr-only">Deleting</span>}
+        >
+          <Trash2 aria-hidden />
+        </SubmitButton>
+      </form>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Delete ${name}?`}
+        description={confirm}
+        confirmLabel="Delete recipe"
+        onConfirm={() => {
+          confirmedRef.current = true;
+          setOpen(false);
+          formRef.current?.requestSubmit();
+        }}
+      />
+    </>
   );
 }
 

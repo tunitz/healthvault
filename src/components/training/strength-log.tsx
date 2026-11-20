@@ -1,8 +1,23 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
-import { logStrengthSetsAction } from "@/app/actions";
-import { Field, SubmitButton } from "@/components/action-form";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  deleteStrengthSetAction,
+  logStrengthSetsAction,
+  updateStrengthSetAction,
+} from "@/app/actions";
+import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { ActionState } from "@/lib/action-state";
 import { dayLabel } from "@/lib/day";
 import { num, plural, workoutLabel } from "@/lib/format";
-import type { ProgressionWeek, StrengthSession } from "@/lib/services/strength";
+import type { ProgressionWeek, StrengthSession, StrengthSet } from "@/lib/services/strength";
 import { formatDistance, formatWeight, weightUnit, type Units } from "@/lib/units";
 
 const SELECT =
@@ -25,6 +40,18 @@ export type StrengthWorkoutOption = {
 };
 
 type SetRow = { id: number };
+
+function displayLoadValue(kg: number | null, units: Units): string {
+  if (kg === null) return "";
+  const v = units === "imperial" ? kg / 0.45359237 : kg;
+  return String(Math.round(v * 10) / 10);
+}
+
+function estimate1Rm(loadKg: number | null, reps: number | null): number | null {
+  if (loadKg === null || reps === null || loadKg <= 0 || reps <= 0) return null;
+  if (reps === 1) return loadKg;
+  return loadKg * (1 + reps / 30);
+}
 
 function StrengthForm({
   today,
@@ -43,7 +70,6 @@ function StrengthForm({
   const [day, setDay] = useState(today);
   const formRef = useRef<HTMLFormElement>(null);
 
-  // A successful log clears the typed values; a validation error leaves the form intact.
   useEffect(() => {
     if (!state.ok || !state.message) return;
     formRef.current?.reset();
@@ -142,7 +168,6 @@ function StrengthForm({
 
       <div className="flex flex-col gap-3 sm:flex-row">
         <Field label="Imported workout" hint="Optional · same day only" className="w-full sm:w-64">
-          {/* Remounts with the day so a link from another day can never be submitted. */}
           <select key={day} name="workoutId" defaultValue="" className={SELECT}>
             <option value="">None</option>
             {dayWorkouts.map((option) => (
@@ -173,6 +198,97 @@ function StrengthForm({
         ) : null}
       </div>
     </form>
+  );
+}
+
+function SetDetailRow({ set, units }: { set: StrengthSet; units: Units }) {
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <li className="flex flex-col gap-2 py-1.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="min-w-0 break-words">
+          <span className="num text-muted-foreground">#{set.setNo}</span> {set.exercise}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="num text-muted-foreground">
+            {set.reps === null ? "reps —" : `${num(set.reps, 0)} reps`}
+            {set.loadKg === null ? "" : ` · ${formatWeight(set.loadKg, units)}`}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 max-sm:size-9"
+            aria-label={`Edit set #${set.setNo} ${set.exercise}`}
+            onClick={() => setEditing((v) => !v)}
+          >
+            <Pencil aria-hidden className="size-3.5" />
+          </Button>
+          <ActionForm
+            action={deleteStrengthSetAction}
+            className="inline-flex"
+            confirm={`Delete set #${set.setNo} (${set.exercise})? This cannot be undone.`}
+          >
+            <input type="hidden" name="id" value={set.id} />
+            <SubmitButton
+              variant="ghost"
+              size="icon-sm"
+              className="size-7 text-muted-foreground hover:text-destructive max-sm:size-9"
+              aria-label={`Delete set #${set.setNo} ${set.exercise}`}
+            >
+              <Trash2 aria-hidden className="size-3.5" />
+            </SubmitButton>
+          </ActionForm>
+        </div>
+      </div>
+
+      {editing ? (
+        <ActionForm
+          action={updateStrengthSetAction}
+          onSuccess={() => setEditing(false)}
+          className="grid gap-2 rounded-lg border border-border/80 bg-muted/20 p-2.5 sm:grid-cols-4"
+        >
+          <input type="hidden" name="id" value={set.id} />
+          <Field label="Exercise" className="sm:col-span-2">
+            <Input name="exercise" defaultValue={set.exercise} required maxLength={120} className="h-8 text-xs" />
+          </Field>
+          <Field label="Reps">
+            <Input
+              name="reps"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={1000}
+              step="any"
+              defaultValue={set.reps ?? ""}
+              className="h-8 text-xs"
+            />
+          </Field>
+          <Field label={`Load (${weightUnit(units)})`}>
+            <Input
+              name="loadKg"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={units === "imperial" ? 2204 : 1000}
+              step="any"
+              defaultValue={displayLoadValue(set.loadKg, units)}
+              className="h-8 text-xs"
+            />
+          </Field>
+          <Field label="Note" className="sm:col-span-3">
+            <Input name="note" defaultValue={set.note ?? ""} maxLength={1000} className="h-8 text-xs" />
+          </Field>
+          <div className="flex items-end justify-end gap-1">
+            <Button type="button" variant="ghost" size="xs" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <SubmitButton size="xs">Save</SubmitButton>
+          </div>
+        </ActionForm>
+      ) : null}
+    </li>
   );
 }
 
@@ -220,19 +336,11 @@ function RecentSessions({ sessions, units }: { sessions: StrengthSession[]; unit
 
           <details className="mt-2">
             <summary className="cursor-pointer py-3.5 text-xs font-medium text-muted-foreground sm:py-0">
-              Set details
+              Set details ({session.sets.length})
             </summary>
-            <ul className="mt-2 flex flex-col gap-1">
+            <ul className="mt-2 divide-y divide-border/50">
               {session.sets.map((set) => (
-                <li key={set.id} className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
-                  <span className="min-w-0 break-words">
-                    <span className="num text-muted-foreground">#{set.setNo}</span> {set.exercise}
-                  </span>
-                  <span className="num text-muted-foreground">
-                    {set.reps === null ? "reps —" : `${num(set.reps, 0)} reps`}
-                    {set.loadKg === null ? "" : ` · ${formatWeight(set.loadKg, units)}`}
-                  </span>
-                </li>
+                <SetDetailRow key={set.id} set={set} units={units} />
               ))}
             </ul>
             {session.sets.some((set) => set.note) ? (
@@ -249,27 +357,45 @@ function Progression({
   exercises,
   selectedExercise,
   progression,
+  progressionWeeks,
   units,
   weekOffset,
 }: {
   exercises: string[];
   selectedExercise: string | null;
   progression: ProgressionWeek[];
+  progressionWeeks: number;
   units: Units;
   weekOffset: number;
 }) {
   const hasSets = progression.some((week) => week.sets > 0);
+  const unit = weightUnit(units);
+  const factor = units === "imperial" ? 1 / 0.45359237 : 1;
+
+  const chartData = useMemo(
+    () =>
+      progression.map((week) => {
+        const est1Rm = estimate1Rm(week.bestLoadKg, week.repsAtBest);
+        return {
+          label: week.weekStart.slice(5),
+          weekStart: week.weekStart,
+          bestLoad: week.bestLoadKg === null ? null : Math.round(week.bestLoadKg * factor * 10) / 10,
+          est1Rm: est1Rm === null ? null : Math.round(est1Rm * factor * 10) / 10,
+          volume: week.weightedSets > 0 ? Math.round(week.totalVolume * factor) : 0,
+        };
+      }),
+    [progression, factor],
+  );
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
       <div className="flex flex-wrap items-end justify-between gap-2">
         <div className="flex flex-col gap-0.5">
-          <h3 className="text-sm font-medium">8-week progression</h3>
+          <h3 className="text-sm font-medium">{progressionWeeks}-week progression</h3>
           <p className="text-xs text-muted-foreground">
-            Best load and reps × load volume per Sunday-start week.
+            Top load, estimated 1RM (Epley), and weekly volume per Sunday-start week.
           </p>
         </div>
-        {/* The picker submits to the current URL, so it works on /training and /training/strength. */}
         {exercises.length > 0 ? (
           <form method="get" className="flex flex-wrap items-end gap-2">
             {weekOffset > 0 ? <input type="hidden" name="week" value={weekOffset} /> : null}
@@ -283,6 +409,14 @@ function Progression({
                 ))}
               </select>
             </label>
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <span>Window</span>
+              <select name="weeks" defaultValue={String(progressionWeeks)} className={SELECT}>
+                <option value="8">8 weeks</option>
+                <option value="16">16 weeks</option>
+                <option value="52">1 year</option>
+              </select>
+            </label>
             <Button type="submit" size="sm" variant="outline">
               View
             </Button>
@@ -291,41 +425,131 @@ function Progression({
       </div>
 
       {selectedExercise === null ? (
-        <p className="py-2 text-sm text-muted-foreground">Log a set to start an 8-week progression.</p>
+        <p className="py-2 text-sm text-muted-foreground">Log a set to start a progression chart.</p>
       ) : !hasSets ? (
         <p className="py-2 text-sm text-muted-foreground">
-          No sets for {selectedExercise} in the last 8 weeks.
+          No sets for {selectedExercise} in the last {progressionWeeks} weeks.
         </p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Week</TableHead>
-              <TableHead className="text-right">Best load</TableHead>
-              <TableHead className="hidden text-right sm:table-cell">Reps at best</TableHead>
-              <TableHead className="text-right">Volume</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {progression.map((week) => (
-              <TableRow key={week.weekStart}>
-                <TableCell className="num">
-                  <span className="sm:hidden">{week.weekStart.slice(5)}</span>
-                  <span className="hidden sm:inline">{week.weekStart}</span>
-                </TableCell>
-                <TableCell className="num text-right">
-                  {week.bestLoadKg === null ? "—" : formatWeight(week.bestLoadKg, units)}
-                </TableCell>
-                <TableCell className="num hidden text-right sm:table-cell">
-                  {week.repsAtBest === null ? "—" : num(week.repsAtBest, 0)}
-                </TableCell>
-                <TableCell className="num text-right">
-                  {week.weightedSets > 0 ? formatWeight(week.totalVolume, units) : "—"}
-                </TableCell>
+        <>
+          <div className="h-56 w-full" role="img" aria-label={`${selectedExercise} progression over ${progressionWeeks} weeks`}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  yAxisId="load"
+                  width={44}
+                  tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                  axisLine={false}
+                  tickLine={false}
+                  unit={` ${unit}`}
+                />
+                <YAxis
+                  yAxisId="vol"
+                  orientation="right"
+                  width={48}
+                  tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--popover)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    fontSize: 12,
+                  }}
+                />
+                <Bar
+                  yAxisId="vol"
+                  dataKey="volume"
+                  name={`Volume (${unit})`}
+                  fill="var(--chart-4)"
+                  fillOpacity={0.28}
+                  radius={[4, 4, 0, 0]}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="load"
+                  type="monotone"
+                  dataKey="bestLoad"
+                  name={`Top load (${unit})`}
+                  stroke="var(--chart-1)"
+                  strokeWidth={2}
+                  connectNulls
+                  dot={{ r: 3 }}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="load"
+                  type="monotone"
+                  dataKey="est1Rm"
+                  name={`Est. 1RM (${unit})`}
+                  stroke="var(--chart-2)"
+                  strokeWidth={2}
+                  strokeDasharray="4 3"
+                  connectNulls
+                  dot={{ r: 2.5 }}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-full bg-[var(--chart-1)]" /> Top load ({unit})
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-full bg-[var(--chart-2)]" /> Est. 1RM ({unit})
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-sm bg-[var(--chart-4)] opacity-50" /> Weekly volume
+            </span>
+          </div>
+
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Week</TableHead>
+                <TableHead className="text-right">Best load</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Est. 1RM</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Reps at best</TableHead>
+                <TableHead className="text-right">Volume</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {progression.map((week) => {
+                const est1Rm = estimate1Rm(week.bestLoadKg, week.repsAtBest);
+                return (
+                  <TableRow key={week.weekStart}>
+                    <TableCell className="num">
+                      <span className="sm:hidden">{week.weekStart.slice(5)}</span>
+                      <span className="hidden sm:inline">{week.weekStart}</span>
+                    </TableCell>
+                    <TableCell className="num text-right">
+                      {week.bestLoadKg === null ? "—" : formatWeight(week.bestLoadKg, units)}
+                    </TableCell>
+                    <TableCell className="num hidden text-right sm:table-cell">
+                      {est1Rm === null ? "—" : formatWeight(est1Rm, units)}
+                    </TableCell>
+                    <TableCell className="num hidden text-right sm:table-cell">
+                      {week.repsAtBest === null ? "—" : num(week.repsAtBest, 0)}
+                    </TableCell>
+                    <TableCell className="num text-right">
+                      {week.weightedSets > 0 ? formatWeight(week.totalVolume, units) : "—"}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </>
       )}
     </div>
   );
@@ -338,6 +562,7 @@ export function StrengthLogSection({
   exercises,
   selectedExercise,
   progression,
+  progressionWeeks = 8,
   workoutOptions,
   sessionsThisWeek,
   weekOffset,
@@ -348,6 +573,7 @@ export function StrengthLogSection({
   exercises: string[];
   selectedExercise: string | null;
   progression: ProgressionWeek[];
+  progressionWeeks?: number;
   workoutOptions: StrengthWorkoutOption[];
   sessionsThisWeek: number;
   weekOffset: number;
@@ -377,6 +603,7 @@ export function StrengthLogSection({
         exercises={exercises}
         selectedExercise={selectedExercise}
         progression={progression}
+        progressionWeeks={progressionWeeks}
         units={units}
         weekOffset={weekOffset}
       />

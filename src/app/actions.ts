@@ -12,6 +12,7 @@ import {
 } from "@/lib/services/measurements";
 import {
   addFood,
+  applyFoodTemplate,
   copyDay,
   deleteEntry,
   deleteFood,
@@ -23,11 +24,14 @@ import {
   setTargets,
   updateEntry,
   updateFood,
+  type Meal,
 } from "@/lib/services/nutrition";
 import {
+  cloneRecipe,
   createRecipe,
   deleteRecipe,
   previewRecipeServing,
+  unarchiveRecipe,
   updateRecipe,
 } from "@/lib/services/recipes";
 import { applyHistoryRefresh, previewHistoryRefresh } from "@/lib/services/food-history";
@@ -49,7 +53,7 @@ import {
   updateSupplement,
 } from "@/lib/services/supplements";
 import { setSessionStatus, startBlock } from "@/lib/services/training-plan";
-import { addStrengthSets } from "@/lib/services/strength";
+import { addStrengthSets, deleteStrengthSet, updateStrengthSet } from "@/lib/services/strength";
 import { logWhey, undoWhey } from "@/lib/services/whey";
 import { resolveUnits, toCanonicalWeight } from "@/lib/units";
 import type {
@@ -119,14 +123,42 @@ export async function saveProfileAction(_prev: ActionState, fd: FormData): Promi
         goal = { type: "run5k", targetSeconds: seconds };
       }
     }
+    const submittedUnits = text(fd, "units") ?? "metric";
+    // Support imperial ft/in and lb inputs from ProfileForm while keeping canonical cm/kg storage.
+    let heightCm: string | number | null = text(fd, "heightCm");
+    if (fd.has("heightFt") || fd.has("heightIn")) {
+      const rawFt = text(fd, "heightFt");
+      const rawIn = text(fd, "heightIn");
+      if (rawFt === null && rawIn === null) {
+        heightCm = null;
+      } else {
+        const ft = rawFt ? Number(rawFt) : 0;
+        const inches = rawIn ? Number(rawIn) : 0;
+        if (!Number.isFinite(ft) || !Number.isFinite(inches) || ft < 0 || inches < 0) {
+          return { ok: false, error: "Height must be valid feet and inches" };
+        }
+        heightCm = Math.round(((ft * 12 + inches) * 2.54) * 10) / 10;
+      }
+    }
+    let goalWeightKg: string | number | null = text(fd, "goalWeightKg");
+    if (fd.has("goalWeightLb")) {
+      const rawLb = text(fd, "goalWeightLb");
+      if (rawLb === null) {
+        goalWeightKg = null;
+      } else {
+        const lb = Number(rawLb);
+        if (!Number.isFinite(lb)) return { ok: false, error: "Goal weight must be a number" };
+        goalWeightKg = Math.round((lb * 0.45359237) * 10) / 10;
+      }
+    }
     updateProfile({
       name: text(fd, "name"),
       birthDate: text(fd, "birthDate"),
       sex: text(fd, "sex"),
-      heightCm: text(fd, "heightCm"),
+      heightCm,
       timezone: text(fd, "timezone") ?? DEFAULT_TIMEZONE,
-      units: text(fd, "units") ?? "metric",
-      goalWeightKg: text(fd, "goalWeightKg"),
+      units: submittedUnits,
+      goalWeightKg,
       goalsNote: text(fd, "goalsNote"),
       dietNote: text(fd, "dietNote"),
       activityNote: text(fd, "activityNote"),
@@ -297,7 +329,7 @@ export async function saveFoodAction(_prev: FoodFormState, fd: FormData): Promis
     const input: Record<string, unknown> = {
       name,
       brand,
-      barcode: text(fd, "barcode"),
+      ...(fd.has("barcode") ? { barcode: text(fd, "barcode") } : {}),
       per100g,
       state: text(fd, "state") ?? undefined,
       yieldFactor: text(fd, "yieldFactor") ?? undefined,
@@ -650,7 +682,8 @@ export async function deleteEntryAction(_prev: ActionState, fd: FormData): Promi
 export async function copyDayAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   try {
     await requireSession();
-    const result = copyDay(text(fd, "fromDay") ?? "", text(fd, "toDay") ?? "");
+    const meal = text(fd, "meal") as Meal | null;
+    const result = copyDay(text(fd, "fromDay") ?? "", text(fd, "toDay") ?? "", { meal });
     refresh("/nutrition", "/");
     if (result.copied === 0) {
       return { ok: true, message: "Already present — nothing copied" };
@@ -662,6 +695,45 @@ export async function copyDayAction(_prev: ActionState, fd: FormData): Promise<A
   } catch (error) {
     return failed(error);
   }
+}
+
+export async function applyFoodTemplateAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    await requireSession();
+    const id = text(fd, "id");
+    const template = text(fd, "template");
+    applyFoodTemplate(id, template, { overwrite: checked(fd, "overwrite") });
+    refresh("/nutrition/foods", "/nutrition");
+    return { ok: true, message: "Template applied" };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function unarchiveRecipeAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    await requireSession();
+    const recipe = unarchiveRecipe(text(fd, "id"));
+    refresh("/nutrition/recipes", `/nutrition/recipes/${recipe.id}`, "/nutrition");
+    return { ok: true, message: "Recipe restored" };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function cloneRecipeAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  let targetUrl: string | null = null;
+  try {
+    await requireSession();
+    const scale = Number(text(fd, "scale") ?? "1");
+    const cloned = cloneRecipe(text(fd, "id"), scale);
+    refresh("/nutrition/recipes", "/nutrition");
+    targetUrl = `/nutrition/recipes/${cloned.id}`;
+  } catch (error) {
+    return failed(error);
+  }
+  if (targetUrl) redirect(targetUrl);
+  return { ok: true, message: "Cloned" };
 }
 
 export async function setTargetsAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
@@ -987,6 +1059,40 @@ export async function logStrengthSetsAction(_prev: ActionState, fd: FormData): P
     });
     refresh("/training", "/");
     return { ok: true, message: rows.length === 1 ? "Logged 1 set" : `Logged ${rows.length} sets` };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function updateStrengthSetAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    await requireSession();
+    const units = resolveUnits(getProfile().units);
+    const rawLoad = text(fd, "loadKg");
+    let loadKg: number | string | null = null;
+    if (rawLoad !== null) {
+      const parsed = Number(rawLoad);
+      loadKg = Number.isFinite(parsed) ? toCanonicalWeight(parsed, units) : rawLoad;
+    }
+    updateStrengthSet(text(fd, "id"), {
+      exercise: text(fd, "exercise") ?? undefined,
+      reps: text(fd, "reps"),
+      loadKg,
+      note: text(fd, "note"),
+    });
+    refresh("/training", "/");
+    return { ok: true, message: "Updated set" };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function deleteStrengthSetAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    await requireSession();
+    const result = deleteStrengthSet(text(fd, "id"));
+    refresh("/training", "/");
+    return result.deleted ? { ok: true, message: "Deleted set" } : { ok: false, error: "Strength set not found" };
   } catch (error) {
     return failed(error);
   }

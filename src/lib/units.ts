@@ -132,10 +132,9 @@ export function toDisplayPace(minPerKm: number, units: Units): number {
 export function formatPace(
   minPerKm: number | null | undefined,
   units: Units,
-  digits = 2,
 ): string {
   if (minPerKm === null || minPerKm === undefined || Number.isNaN(minPerKm)) return "—";
-  return `${num(toDisplayPace(minPerKm, units), digits)} ${paceUnitLabel(units)}`;
+  return `${formatSeconds(toDisplayPace(minPerKm, units) * 60)} ${paceUnitLabel(units)}`;
 }
 
 /** Pace written as a clock: 6 min/km -> "6:00 min/km". Used for the 5K goal and attempt

@@ -2,13 +2,21 @@ import { desc } from "drizzle-orm";
 import { db, sqlite } from "@/db";
 import { uploads } from "@/db/schema";
 import { addDays, localDay, localDayStartMs } from "@/lib/day";
-import { counts, sleepSummary, stepsSummary, workoutHistory } from "@/db/queries";
+import {
+  activeEnergyBetween,
+  counts,
+  sleepDailyHours,
+  sleepSummary,
+  stepsSummary,
+  workoutHistory,
+} from "@/db/queries";
 import { dayNutrition, type DayNutrition } from "@/lib/services/nutrition";
 import { latestMeasurement, weightTrend, type Point } from "@/lib/services/measurements";
 import { ageOf, getProfile, getTimezone, isProfileStarted, parseWheyLink, trainingGoal, workSchedule, type Profile } from "@/lib/services/profile";
 import { nextSupplement, todayChecklist } from "@/lib/services/supplements";
 import { strengthContext } from "@/lib/services/strength";
 import { weeklySummary } from "@/lib/services/training";
+import { currentBlock, sessionTarget, type SessionTarget } from "@/lib/services/training-plan";
 import { fail } from "@/lib/validate";
 
 export function currentDay(): string {
@@ -52,30 +60,11 @@ export function metricsSeries(metric: unknown, days = 30): {
   }
 
   if (name === "sleep") {
-    const rows = sqlite
-      .prepare(
-        `WITH segments AS (
-           SELECT CASE WHEN CAST(substr(start_date, 12, 2) AS INTEGER) < 12
-                       THEN date(day, '-1 day') ELSE day END AS night,
-                  SUM((end_ms - start_ms) / 3600000.0) AS hours
-           FROM records
-           WHERE type_identifier = 'HKCategoryTypeIdentifierSleepAnalysis'
-             AND value IN (2, 4, 5, 6) AND start_ms >= ?
-           GROUP BY night
-         ) SELECT night AS day, hours AS value FROM segments WHERE night >= ? ORDER BY night`,
-      )
-      .all(startMs, start) as { day: string; value: number }[];
-    return { metric: name, unit: "h", points: rows };
+    return { metric: name, unit: "h", points: sleepDailyHours(start, end) };
   }
 
   if (name === "active_energy") {
-    const rows = sqlite
-      .prepare(
-        `SELECT day, SUM(active_energy_burned) AS value FROM activity_summaries
-         WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day`,
-      )
-      .all(start, end) as { day: string; value: number }[];
-    return { metric: name, unit: "kcal", points: rows.filter((r) => r.value !== null) };
+    return { metric: name, unit: "kcal", points: activeEnergyBetween(start, end) };
   }
 
   const typeIdentifier = METRIC_TYPE[name as keyof typeof METRIC_TYPE];
@@ -128,6 +117,23 @@ export type HealthContext = {
     sleep: ReturnType<typeof sleepSummary>;
     /** Compact current-week summary; no readiness score and no nutrition coupling. */
     weekly: ReturnType<typeof weeklySummary>;
+    /** Active 16-week 5K training block summary, or null when no block is active. */
+    activeBlock: {
+      blockStart: string;
+      currentWeekNo: number;
+      totalWeeks: number;
+      finished: boolean;
+      thisWeek: {
+        id: number;
+        day: string;
+        kind: string;
+        intent: string | null;
+        title: string;
+        status: string;
+        workoutId: number | null;
+        target: SessionTarget | null;
+      }[];
+    } | null;
   };
   data: {
     counts: ReturnType<typeof counts>;
@@ -193,61 +199,125 @@ export function dataFreshness(): { lastRecordDay: string | null; lastWorkoutDay:
   return { lastRecordDay: lastRecord?.day ?? null, lastWorkoutDay: lastWorkout?.day ?? null };
 }
 
+function resolveRequestedSections(sections?: readonly unknown[]): Set<ContextSection> {
+  if (!sections || sections.length === 0) return new Set(CONTEXT_SECTIONS);
+  const requested = new Set<ContextSection>();
+  for (const section of sections) {
+    if ((CONTEXT_SECTIONS as readonly unknown[]).includes(section)) {
+      requested.add(section as ContextSection);
+    }
+  }
+  return requested.size === 0 ? new Set(CONTEXT_SECTIONS) : requested;
+}
+
 /** Everything an agent should know before answering, so it never asks for stored facts.
  * Pass `sections` to return only those parts; omitting it keeps the full contract. */
 export function healthvaultContext(): HealthContext;
 export function healthvaultContext(sections: readonly unknown[] | undefined): Partial<HealthContext>;
 export function healthvaultContext(sections?: readonly unknown[]): Partial<HealthContext> {
-  const profile = getProfile();
-  const tz = profile.timezone;
-  const today = currentDay();
-  const weight7 = weightTrend(7);
-  const latestUpload = db
-    .select({
-      filename: uploads.filename,
-      status: uploads.status,
-      finishedAtMs: uploads.finishedAtMs,
-      inserted: uploads.recordsInserted,
-    })
-    .from(uploads)
-    .orderBy(desc(uploads.createdAtMs))
-    .limit(1)
-    .get();
-  const fresh = dataFreshness();
+  const requested = resolveRequestedSections(sections);
+  const needsProfile =
+    requested.has("today") ||
+    requested.has("profile") ||
+    requested.has("nutrition") ||
+    requested.has("weight") ||
+    requested.has("supplements") ||
+    requested.has("training");
+  const profile = needsProfile ? getProfile() : null;
+  const tz = profile ? profile.timezone : getTimezone();
+  const today = localDay(Date.now(), tz);
 
-  return selectContextSections({
-    generatedAt: new Date().toISOString(),
-    today,
-    timezone: tz,
-    profile: {
+  let freshCache: { lastRecordDay: string | null; lastWorkoutDay: string | null } | null = null;
+  const getFresh = () => (freshCache ??= dataFreshness());
+
+  const result: Partial<HealthContext> = {};
+
+  if (requested.has("today")) {
+    result.generatedAt = new Date().toISOString();
+    result.today = today;
+    result.timezone = tz;
+  }
+
+  if (requested.has("profile") && profile) {
+    result.profile = {
       ...profile,
       workSchedule: workSchedule(profile),
       goal: trainingGoal(profile),
       wheyLink: parseWheyLink(profile),
       age: ageOf(profile, today),
       started: isProfileStarted(profile),
-    },
-    nutrition: dayNutrition(today),
-    weight: {
+    };
+  }
+
+  if (requested.has("nutrition")) {
+    result.nutrition = dayNutrition(today);
+  }
+
+  if (requested.has("weight") && profile) {
+    const weight7 = weightTrend(7);
+    result.weight = {
       latest: latestMeasurement("weight"),
       goalKg: profile.goalWeightKg,
       change7dKg: weight7.changeKg,
       points: weight7.points,
-    },
-    supplements: todayChecklist(today),
-    nextSupplement: nextSupplement(today),
-    strength: strengthContext(),
-    training: {
+    };
+  }
+
+  if (requested.has("supplements")) {
+    const checklist = todayChecklist(today);
+    result.supplements = checklist;
+    result.nextSupplement = nextSupplement(today, Date.now(), checklist);
+  }
+
+  if (requested.has("training")) {
+    result.strength = strengthContext();
+    const block = currentBlock();
+    result.training = {
       workouts: workoutHistory(10),
       steps: stepsSummary(30),
       sleep: sleepSummary(30),
-      weekly: weeklySummary(0),
-    },
-    data: {
+      weekly: weeklySummary(0, getFresh()),
+      activeBlock: block
+        ? {
+            blockStart: block.blockStart,
+            currentWeekNo: block.currentWeekNo,
+            totalWeeks: block.totalWeeks,
+            finished: block.finished,
+            thisWeek: block.thisWeek.map((s) => ({
+              id: s.id,
+              day: s.day,
+              kind: s.kind,
+              intent: s.intent,
+              title: s.title,
+              status: s.status,
+              workoutId: s.workoutId,
+              target: sessionTarget(s),
+            })),
+          }
+        : null,
+    };
+  }
+
+  if (requested.has("data")) {
+    const latestUpload = db
+      .select({
+        filename: uploads.filename,
+        status: uploads.status,
+        finishedAtMs: uploads.finishedAtMs,
+        inserted: uploads.recordsInserted,
+      })
+      .from(uploads)
+      .orderBy(desc(uploads.createdAtMs))
+      .limit(1)
+      .get();
+    const fresh = getFresh();
+    result.data = {
       counts: counts(),
       lastUpload: latestUpload ?? null,
       lastRecordDay: fresh.lastRecordDay,
       lastWorkoutDay: fresh.lastWorkoutDay,
-    },
-  }, sections);
+    };
+  }
+
+  return result;
 }

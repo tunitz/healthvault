@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
-import { allWorkouts } from "@/db/queries";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import type { HealthContext } from "@/lib/services/context";
 import type { Units } from "@/lib/units";
 import { formatDistance, formatPace, formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
-import { compact, instant, num, plural } from "@/lib/format";
+import { compact, instant, num, plural, workoutLabel } from "@/lib/format";
 import { dayHeading } from "@/lib/day";
 import { SleepStackChart } from "@/components/sleep-stack-chart";
+import { SupplementChecklist } from "@/components/supplements/supplement-forms";
 import { SeriesChart } from "./series-chart";
 import { supplementHint } from "./data";
 import type { DashboardData, RangeData } from "./widget-data";
@@ -21,8 +23,25 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-function Empty({ children = "No data in this range" }: { children?: string }) {
-  return <p className="py-10 text-center text-sm text-muted-foreground">{children}</p>;
+function Empty({
+  children = "No data in this range",
+  ctaHref,
+  ctaLabel,
+}: {
+  children?: string;
+  ctaHref?: string;
+  ctaLabel?: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+      <p className="text-sm text-muted-foreground">{children}</p>
+      {ctaHref && ctaLabel ? (
+        <Button asChild variant="outline" size="xs">
+          <Link href={ctaHref}>{ctaLabel}</Link>
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function SimpleTable({ caption, head, rows }: { caption: string; head: string[]; rows: ReactNode[][] }) {
@@ -63,7 +82,13 @@ function nextLabel(context: HealthContext): string | null {
 
 function nutritionView(context: HealthContext, display: WidgetPreference["display"]): ReactNode {
   const { totals, targets, remaining, entries } = context.nutrition;
-  if (entries.length === 0) return <Empty>No meals logged today</Empty>;
+  if (entries.length === 0) {
+    return (
+      <Empty ctaHref="/nutrition" ctaLabel="+ Log meal">
+        No meals logged today
+      </Empty>
+    );
+  }
   const rows: { label: string; total: string; target: string; left: string }[] = [
     { label: "Calories", total: `${num(totals.kcal, 0)} kcal`, target: `${num(targets.kcal, 0)}`, left: `${num(remaining.kcal, 0)}` },
     { label: "Protein", total: `${num(totals.proteinG, 0)} g`, target: `${num(targets.proteinG, 0)} g`, left: `${num(remaining.proteinG, 0)} g` },
@@ -144,7 +169,13 @@ function activityView(range: RangeData, display: WidgetPreference["display"]): R
 function supplementsView(context: HealthContext, range: RangeData, display: WidgetPreference["display"]): ReactNode {
   const checklist = context.supplements;
   const hint = supplementHint(checklist, nextLabel(context));
-  if (checklist.total === 0) return <Empty>No supplements scheduled today</Empty>;
+  if (checklist.total === 0) {
+    return (
+      <Empty ctaHref="/supplements/regimens" ctaLabel="Add regimen">
+        No supplements scheduled today
+      </Empty>
+    );
+  }
   if (display === "adherence") {
     const rows = range.adherence.map((item) => {
       const latest = item.weeks[item.weeks.length - 1];
@@ -155,20 +186,7 @@ function supplementsView(context: HealthContext, range: RangeData, display: Widg
     );
   }
   if (display === "checklist") {
-    return (
-      <ul className="divide-y divide-border text-sm">
-        {checklist.items.map((item) => (
-          <li key={item.supplement.id} className="flex items-center justify-between gap-3 py-2">
-            <span className="min-w-0 truncate">
-              {item.supplement.name}
-              {item.schedule.time ? <span className="text-muted-foreground"> · {item.schedule.time}</span> : null}
-            </span>
-            {/* Text status, never colour alone. */}
-            <span className="shrink-0 text-xs font-medium">{item.logged ? "Taken" : "Pending"}</span>
-          </li>
-        ))}
-      </ul>
-    );
+    return <SupplementChecklist day={checklist.day} items={checklist.items} />;
   }
   if (display === "table") {
     return (
@@ -305,32 +323,44 @@ function weightView(context: HealthContext, range: RangeData, units: Units, disp
   );
 }
 
-function workoutsView(range: RangeData, units: Units, display: WidgetPreference["display"]): ReactNode {
+function workoutsView(
+  context: HealthContext,
+  range: RangeData,
+  units: Units,
+  display: WidgetPreference["display"],
+): ReactNode {
   const totals = range.workoutTotals;
   if (display === "bars") {
-    const rows = range.workoutTypes.map((row) => ({ day: row.type, value: row.sessions }));
+    const rows = range.workoutTypes.map((row) => ({ day: workoutLabel(row.type), value: row.sessions }));
     return (
       <SeriesChart
         data={rows}
         kind="bars"
         label="Sessions"
         colorVar="var(--chart-5)"
+        xTickFormatter={(label) => (label.length > 12 ? `${label.slice(0, 11)}…` : label)}
         ariaLabel={`Workout sessions by type over ${range.days} days`}
       />
     );
   }
   if (display === "table") {
-    const rows = allWorkouts({ limit: 10 });
-    if (rows.length === 0) return <Empty>No workouts recorded</Empty>;
+    const rows = context.training.workouts;
+    if (rows.length === 0) {
+      return (
+        <Empty ctaHref="/uploads" ctaLabel="Import export">
+          No workouts recorded
+        </Empty>
+      );
+    }
     return (
       <SimpleTable
         caption="Recent workouts"
         head={["Day", "Activity", "Distance", "Minutes"]}
         rows={rows.map((row) => [
           row.day,
-          row.type.replace(/^HKWorkoutActivityType/, ""),
-          formatDistance(row.distanceKm, units),
-          row.durationSeconds === null ? "—" : num(row.durationSeconds / 60, 0),
+          workoutLabel(row.type),
+          formatDistance(row.km, units),
+          row.minutes === null ? "—" : num(row.minutes, 0),
         ])}
       />
     );
@@ -418,7 +448,7 @@ export function WidgetView({
     case "measurements": return measurementsView(data, range, units, pref.display);
     case "sleep": return sleepView(range, pref.display);
     case "weight": return weightView(context, range, units, pref.display);
-    case "workouts": return workoutsView(range, units, pref.display);
+    case "workouts": return workoutsView(context, range, units, pref.display);
     case "training": return trainingView(context, pref.display);
     case "imports": return importsView(context, data, pref.display);
   }

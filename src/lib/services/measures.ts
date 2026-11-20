@@ -1,7 +1,17 @@
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
+import { db, sqlite } from "@/db";
 import { measures } from "@/db/schema";
 import { fail, numField, str } from "@/lib/validate";
+
+type MeasureRow = typeof measures.$inferSelect;
+let cachedMeasures: { dbName: string; rows: MeasureRow[]; byName: Map<string, MeasureRow> } | null = null;
+
+function loadMeasuresCache() {
+  if (cachedMeasures && cachedMeasures.dbName === sqlite.name) return cachedMeasures;
+  const rows = db.select().from(measures).orderBy(measures.name).all();
+  const byName = new Map(rows.map((r) => [r.name.toLowerCase(), r]));
+  cachedMeasures = { dbName: sqlite.name, rows, byName };
+  return cachedMeasures;
+}
 
 /**
  * Household measures (tbsp, tsp, kutsarita, piece, scoop, strip).
@@ -98,11 +108,7 @@ export function resolveMeasureGrams(
       400,
     );
   }
-  const row = db
-    .select()
-    .from(measures)
-    .where(sql`lower(${measures.name}) = ${name}`)
-    .get();
+  const row = loadMeasuresCache().byName.get(name);
   if (row && typeof row.gramsDefault === "number" && row.gramsDefault > 0) {
     return {
       name,
@@ -129,7 +135,7 @@ function cappedGrams(grams: number, name: string, label: string): number {
 /** Shared defaults only (units with a universal mass). */
 export function measureDefaults(): MeasuresMap {
   const out: MeasuresMap = {};
-  for (const row of db.select().from(measures).all()) {
+  for (const row of loadMeasuresCache().rows) {
     if (typeof row.gramsDefault === "number" && row.gramsDefault > 0) {
       out[row.name.toLowerCase()] = row.gramsDefault;
     }
@@ -146,5 +152,5 @@ export function effectiveMeasures(
 }
 
 export function listMeasures() {
-  return db.select().from(measures).orderBy(measures.name).all();
+  return [...loadMeasuresCache().rows];
 }

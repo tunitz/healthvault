@@ -7,7 +7,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 
-type Result = { inserted: number; duplicates: number; filename: string };
+type Result = {
+  inserted: number;
+  duplicates: number;
+  routesInserted?: number;
+  ecgsInserted?: number;
+  filename: string;
+};
 
 const readable = (bytes: number) => {
   const units = ["B", "KB", "MB", "GB"];
@@ -22,17 +28,37 @@ export function UploadForm() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [rowsProcessed, setRowsProcessed] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const startedAtRef = useRef<number>(0);
   const router = useRouter();
 
-  // A 400 MB export takes ~35 s to parse, and the browser gets no progress events for it:
-  // show elapsed time so a long import does not look like a hang.
+  // Poll `/api/upload` while an import is running so a large export displays live rows parsed.
   useEffect(() => {
     if (!busy) return;
     const started = Date.now();
-    const t = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
-    return () => clearInterval(t);
+    startedAtRef.current = started;
+    const clock = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    let cancelled = false;
+    const poll = setInterval(() => {
+      fetch("/api/upload", { cache: "no-store" })
+        .then((r) => (r.ok ? (r.json() as Promise<{ latest?: { status?: string; rowsProcessed?: number; createdAtMs?: number } | null }>) : null))
+        .then((body) => {
+          if (cancelled || !body?.latest) return;
+          if ((body.latest.createdAtMs ?? 0) >= started - 5000 && typeof body.latest.rowsProcessed === "number") {
+            setRowsProcessed(body.latest.rowsProcessed);
+          }
+        })
+        .catch(() => {
+          // Best-effort live counter; main POST reports real errors.
+        });
+    }, 750);
+    return () => {
+      cancelled = true;
+      clearInterval(clock);
+      clearInterval(poll);
+    };
   }, [busy]);
 
   function pick(next: File | null) {
@@ -49,6 +75,7 @@ export function UploadForm() {
     if (!file || busy) return;
     setBusy(true);
     setElapsed(0);
+    setRowsProcessed(0);
     setResult(null);
     const form = new FormData();
     form.append("file", file);
@@ -58,7 +85,13 @@ export function UploadForm() {
       if (!res.ok) {
         toast.error("Import failed", { description: body.error ?? `HTTP ${res.status}` });
       } else {
-        setResult({ inserted: body.inserted, duplicates: body.duplicates, filename: file.name });
+        setResult({
+          inserted: body.inserted,
+          duplicates: body.duplicates,
+          routesInserted: body.routesInserted,
+          ecgsInserted: body.ecgsInserted,
+          filename: file.name,
+        });
         toast.success(`Imported ${body.inserted.toLocaleString("en-US")} rows`);
         setFile(null);
         if (inputRef.current) inputRef.current.value = "";
@@ -89,7 +122,9 @@ export function UploadForm() {
           {file ? file.name : "Drop Export.zip here"}
         </p>
         <p className="text-xs text-muted-foreground">
-          {file ? readable(file.size) : "or choose the file — a large export takes about 35 seconds to import"}
+          {file
+            ? readable(file.size)
+            : "or choose the file — imports records, workouts, GPX routes, and ECG strips"}
         </p>
         <input
           ref={inputRef}
@@ -106,12 +141,23 @@ export function UploadForm() {
           </Button>
           <Button onClick={submit} disabled={!file || busy}>
             {busy ? <Spinner data-icon="inline-start" /> : null}
-            {busy ? `Parsing… ${elapsed}s` : "Import"}
+            {busy
+              ? rowsProcessed > 0
+                ? `Parsed ${rowsProcessed.toLocaleString("en-US")} rows · ${elapsed}s`
+                : `Uploading & parsing… ${elapsed}s`
+              : "Import"}
           </Button>
         </div>
         {busy ? (
-          <div className="h-1 w-full max-w-sm overflow-hidden rounded-full bg-muted">
-            <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+          <div className="flex w-full max-w-sm flex-col gap-1" role="status" aria-live="polite">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-2/5 animate-pulse rounded-full bg-primary" />
+            </div>
+            <p className="num text-[11px] text-muted-foreground">
+              {rowsProcessed > 0
+                ? `${rowsProcessed.toLocaleString("en-US")} rows processed so far…`
+                : "Reading export.xml, routes, and ECG strips…"}
+            </p>
           </div>
         ) : null}
       </div>
@@ -125,13 +171,15 @@ export function UploadForm() {
             {result.duplicates > 0
               ? `${result.duplicates.toLocaleString("en-US")} rows were already present and were skipped.`
               : "Nothing was duplicated."}
+            {result.routesInserted ? ` · ${result.routesInserted} GPX routes` : ""}
+            {result.ecgsInserted ? ` · ${result.ecgsInserted} ECG strips` : ""}
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Button asChild size="sm">
               <Link href="/training">See training</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link href="/uploads">Import another</Link>
+              <Link href="/workouts">View workouts</Link>
             </Button>
           </div>
         </div>

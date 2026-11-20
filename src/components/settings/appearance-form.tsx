@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { ThemeModePicker } from "@/components/theme-toggle";
 import {
@@ -123,18 +124,21 @@ function RadioGroup<T extends string>({
 }
 
 /** Settings → Appearance. Every control previews immediately; nothing is persisted until Save. */
-export function AppearanceForm() {
+export function AppearanceForm({ initialSnapshot }: { initialSnapshot?: SettingsSnapshot } = {}) {
   const { setTheme } = useTheme();
-  const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
-  const [draft, setDraft] = useState<AppearanceSettings | null>(null);
-  const [revision, setRevision] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(initialSnapshot ?? null);
+  const [draft, setDraft] = useState<AppearanceSettings | null>(initialSnapshot?.value.appearance ?? null);
+  const [revision, setRevision] = useState(initialSnapshot?.revision ?? 0);
+  const [loading, setLoading] = useState(!initialSnapshot);
   const [pending, setPending] = useState(false);
+  const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const savedRef = useRef<AppearanceSettings | null>(null);
+  const savedRef = useRef<AppearanceSettings | null>(initialSnapshot?.value.appearance ?? null);
 
   useEffect(() => {
+    if (initialSnapshot) return;
     let active = true;
     fetchSettings()
       .then((loaded) => {
@@ -153,7 +157,7 @@ export function AppearanceForm() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialSnapshot]);
 
   // Live preview: reflects the draft in this document without writing to the server.
   // applyAppearance runs on every draft edit; next-themes is switched only when the mode itself
@@ -277,11 +281,12 @@ export function AppearanceForm() {
     return <p className="text-sm text-muted-foreground">Loading appearance preferences…</p>;
   }
 
-  const resolvedMode = resolveMode(draft.mode);
+  const resolvedMode = draft.mode === "system" && !mounted ? "light" : resolveMode(draft.mode);
   const colors = effectiveColors(draft, resolvedMode);
   const warning = contrastWarning(draft, resolvedMode);
   // Only an explicit "Custom" click highlights Custom; editing a swatch keeps its preset visible.
   const activePreset = draft.preset;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(snapshot.value.appearance);
 
   return (
     <div className="space-y-6">
@@ -300,10 +305,11 @@ export function AppearanceForm() {
             <Button
               key={preset.id}
               type="button"
+              role="radio"
               variant={activePreset === preset.id ? "default" : "outline"}
               size="sm"
               disabled={pending}
-              aria-pressed={activePreset === preset.id}
+              aria-checked={activePreset === preset.id}
               onClick={() => selectPreset(preset.id)}
             >
               {preset.label}
@@ -311,10 +317,11 @@ export function AppearanceForm() {
           ))}
           <Button
             type="button"
+            role="radio"
             variant={activePreset === CUSTOM_PRESET ? "default" : "outline"}
             size="sm"
             disabled={pending}
-            aria-pressed={activePreset === CUSTOM_PRESET}
+            aria-checked={activePreset === CUSTOM_PRESET}
             onClick={() => selectPreset(CUSTOM_PRESET)}
           >
             Custom
@@ -469,7 +476,7 @@ export function AppearanceForm() {
         <Button type="button" onClick={onSave} disabled={pending || Boolean(warning)} aria-busy={pending}>
           {pending ? "Saving…" : "Save appearance"}
         </Button>
-        <Button type="button" variant="outline" onClick={onRestore} disabled={pending}>
+        <Button type="button" variant="outline" onClick={() => setConfirmRestore(true)} disabled={pending}>
           Restore defaults
         </Button>
         {!conflict ? (
@@ -480,6 +487,43 @@ export function AppearanceForm() {
           <span className="text-xs font-medium text-destructive">{CONFLICT_MESSAGE}</span>
         )}
       </div>
+
+      {dirty ? (
+        <div
+          role="status"
+          className="sticky bottom-16 z-20 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/40 bg-background/95 p-3 shadow-lg backdrop-blur md:bottom-4"
+        >
+          <span className="text-xs font-medium">You have unsaved appearance changes.</span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => {
+                if (savedRef.current) setDraft(savedRef.current);
+              }}
+            >
+              Discard
+            </Button>
+            <Button type="button" size="sm" onClick={onSave} disabled={pending || Boolean(warning)}>
+              {pending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <ConfirmDialog
+        open={confirmRestore}
+        onOpenChange={setConfirmRestore}
+        title="Restore appearance defaults?"
+        description="This resets theme mode, preset, custom colours, chart palette, density, card corners and font size to defaults."
+        confirmLabel="Restore defaults"
+        onConfirm={() => {
+          setConfirmRestore(false);
+          void onRestore();
+        }}
+      />
     </div>
   );
 }

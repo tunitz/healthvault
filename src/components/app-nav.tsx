@@ -22,6 +22,7 @@ import {
   History,
   LayoutDashboard,
   LogOut,
+  Moon,
   MoreHorizontal,
   NotebookPen,
   PanelLeftClose,
@@ -33,15 +34,20 @@ import {
   Ruler,
   Search,
   Settings,
+  Sun,
   Target,
   Upload,
+  User,
   Utensils,
   type LucideIcon,
 } from "lucide-react";
+import { useTheme } from "next-themes";
 import { Dialog } from "radix-ui";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
+import { applyAppearance, cacheAppearance } from "@/components/theme-provider";
+import { fetchSettings, saveSettings } from "@/components/dashboard/settings-api";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; Icon: LucideIcon; hint?: string };
@@ -89,6 +95,7 @@ const GROUPS: NavGroup[] = [
 ];
 
 const UTILITY_ITEMS: NavItem[] = [
+  { href: "/profile", label: "Profile", Icon: User },
   { href: "/measurements", label: "Measurements", Icon: Ruler },
   { href: "/uploads", label: "Import", Icon: Upload },
   { href: "/settings", label: "Settings", Icon: Settings },
@@ -105,7 +112,7 @@ const LOG_ACTIONS: NavItem[] = [
   { href: "/nutrition", label: "Log food", hint: "Add a food or meal", Icon: Utensils },
   { href: "/supplements", label: "Log supplement", hint: "Tick today's doses", Icon: Pill },
   { href: "/measurements", label: "Log measurement", hint: "Weight, body fat, waist", Icon: Ruler },
-  { href: "/workouts", label: "Log activity", hint: "Workout or strength set", Icon: Dumbbell },
+  { href: "/training/strength", label: "Log strength set", hint: "Record lifts & reps", Icon: Dumbbell },
   { href: "/uploads", label: "Import health data", hint: "Manual Apple Health export", Icon: Upload },
 ];
 
@@ -208,9 +215,11 @@ function SheetLink({ item, active }: { item: NavItem; active: boolean }) {
 export function AppNav({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { resolvedTheme, setTheme } = useTheme();
   const [moreOpen, setMoreOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [themeSaving, setThemeSaving] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [offline, setOffline] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -221,6 +230,24 @@ export function AppNav({ children }: { children: ReactNode }) {
     Supplements: true,
   });
   const refreshInitiated = useRef(false);
+
+  const toggleQuickTheme = useCallback(async () => {
+    if (themeSaving) return;
+    const nextMode = resolvedTheme === "dark" ? "light" : "dark";
+    setTheme(nextMode);
+    setThemeSaving(true);
+    try {
+      const snapshot = await fetchSettings();
+      const appearance = { ...snapshot.value.appearance, mode: nextMode as "light" | "dark" };
+      applyAppearance(appearance, nextMode);
+      const saved = await saveSettings({ ...snapshot.value, appearance }, snapshot.revision);
+      cacheAppearance(saved.value.appearance);
+    } catch {
+      // Local mode toggle still applies immediately even if offline.
+    } finally {
+      setThemeSaving(false);
+    }
+  }, [resolvedTheme, setTheme, themeSaving]);
 
   const toggleSidebar = useCallback(() => {
     const next = !getSidebarSnapshot();
@@ -303,8 +330,8 @@ export function AppNav({ children }: { children: ReactNode }) {
     secondaryItems.some((item) => isActive(pathname, item.href)) &&
     !PRIMARY.some((item) => isActive(pathname, item.href));
 
-  // The login screen has no app chrome.
-  if (pathname === "/login") return <>{children}</>;
+  // Sign-in and first-run setup have no authenticated app chrome.
+  if (pathname === "/login" || pathname === "/setup") return <>{children}</>;
 
   async function signOut() {
     setSigningOut(true);
@@ -331,7 +358,7 @@ export function AppNav({ children }: { children: ReactNode }) {
             className="flex shrink-0 items-center gap-2 rounded-md text-sm font-semibold tracking-tight text-foreground"
           >
             <Logo size={24} />
-            <span>Health Vault</span>
+            <span>HealthVault</span>
           </Link>
 
           <div className="ms-auto flex items-center gap-1">
@@ -347,6 +374,19 @@ export function AppNav({ children }: { children: ReactNode }) {
             >
               <Plus aria-hidden className="size-4" />
               <span className="hidden sm:inline">Log</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-11 text-muted-foreground hover:text-foreground md:size-9"
+              onClick={() => void toggleQuickTheme()}
+              disabled={themeSaving}
+              aria-label="Toggle color theme"
+              title="Switch light / dark mode"
+            >
+              <Sun aria-hidden className="size-4 dark:hidden" />
+              <Moon aria-hidden className="hidden size-4 dark:block" />
             </Button>
             <Button
               type="button"

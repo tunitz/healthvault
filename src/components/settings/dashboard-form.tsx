@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -80,17 +81,22 @@ function WidgetSelect<T extends string>({
 }
 
 /** Settings → Dashboard. Every change previews in the list; nothing is saved until Save. */
-export function DashboardForm() {
-  const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
-  const [draft, setDraft] = useState<DashboardSettings | null>(null);
-  const [revision, setRevision] = useState(0);
+export function DashboardForm({ initialSnapshot }: { initialSnapshot?: SettingsSnapshot } = {}) {
+  const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(initialSnapshot ?? null);
+  const [draft, setDraft] = useState<DashboardSettings | null>(
+    initialSnapshot ? cloneDashboard(initialSnapshot.value.dashboard) : null,
+  );
+  const [revision, setRevision] = useState(initialSnapshot?.revision ?? 0);
   const [layoutName, setLayoutName] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialSnapshot);
   const [pending, setPending] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const [layoutToDelete, setLayoutToDelete] = useState<{ key: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
 
   useEffect(() => {
+    if (initialSnapshot) return;
     let active = true;
     fetchSettings()
       .then((loaded) => {
@@ -104,7 +110,7 @@ export function DashboardForm() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialSnapshot]);
 
   const patchWidget = useCallback((id: string, patch: Partial<WidgetPreference>) => {
     setDraft((current) => {
@@ -373,7 +379,13 @@ export function DashboardForm() {
                 <Button type="button" size="sm" variant="outline" onClick={() => applyLayout(key)} disabled={pending}>
                   Apply
                 </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={() => deleteLayout(key)} disabled={pending}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setLayoutToDelete({ key, name: layout.name })}
+                  disabled={pending}
+                >
                   Delete
                 </Button>
               </div>
@@ -400,7 +412,7 @@ export function DashboardForm() {
         <Button type="button" onClick={onSave} disabled={pending} aria-busy={pending}>
           {pending ? "Saving…" : "Save dashboard"}
         </Button>
-        <Button type="button" variant="outline" onClick={onRestore} disabled={pending}>
+        <Button type="button" variant="outline" onClick={() => setConfirmRestore(true)} disabled={pending}>
           Restore defaults
         </Button>
         {conflict ? (
@@ -409,6 +421,31 @@ export function DashboardForm() {
           <span className="text-xs text-muted-foreground">Saved across devices when you press Save.</span>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRestore}
+        onOpenChange={setConfirmRestore}
+        title="Restore dashboard defaults?"
+        description="This resets all widget visibility, sizes, ranges, display modes, and removes saved layouts."
+        confirmLabel="Restore defaults"
+        onConfirm={() => {
+          setConfirmRestore(false);
+          void onRestore();
+        }}
+      />
+      <ConfirmDialog
+        open={layoutToDelete !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setLayoutToDelete(null);
+        }}
+        title={layoutToDelete ? `Delete layout "${layoutToDelete.name}"?` : "Delete layout?"}
+        description="This removes the saved layout from your draft. Save dashboard to persist the removal."
+        confirmLabel="Delete layout"
+        onConfirm={() => {
+          if (layoutToDelete) deleteLayout(layoutToDelete.key);
+          setLayoutToDelete(null);
+        }}
+      />
     </div>
   );
 }
