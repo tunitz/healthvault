@@ -1,8 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { toggleSupplementAction } from "@/app/actions";
+import { LogDialog } from "@/components/log-dialog";
+import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { num } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { AdherenceWeek, SupplementAdherence } from "@/lib/services/supplements";
@@ -25,17 +29,16 @@ function weekPercent(week: AdherenceWeek, isCurrent: boolean): { value: number; 
 }
 
 function DayDot({
-  supplementId,
   supplementName,
   day,
   label,
+  onSelect,
 }: {
-  supplementId: number;
   supplementName: string;
   day: AdherenceWeek["days"][number];
   label: string;
+  onSelect: () => void;
 }) {
-  const [pending, startTransition] = useTransition();
   const state = !day.scheduled
     ? "unscheduled"
     : day.taken
@@ -55,27 +58,13 @@ function DayDot({
     );
   }
 
-  function handleToggle() {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.set("supplementId", String(supplementId));
-      fd.set("day", day.day);
-      fd.set("taken", day.taken ? "0" : "1");
-      const res = await toggleSupplementAction({ ok: true }, fd);
-      if (!res.ok) {
-        toast.error(res.error ?? "Could not update intake");
-      }
-    });
-  }
-
   return (
     <button
       type="button"
-      disabled={pending}
-      onClick={handleToggle}
+      onClick={onSelect}
       aria-pressed={day.taken}
-      aria-label={`${supplementName} ${label} — click to toggle`}
-      title={`${label} (click to toggle)`}
+      aria-label={`${supplementName} ${label} — click to change`}
+      title={`${label} (click to change)`}
       className={cn(
         "flex size-7 items-center justify-center rounded-full border transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50",
         state === "taken" && "border-primary bg-primary",
@@ -86,9 +75,38 @@ function DayDot({
   );
 }
 
+type Selection = {
+  supplementId: number;
+  supplementName: string;
+  day: string;
+  taken: boolean;
+  label: string;
+};
+
 export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
+  const router = useRouter();
   const [showArchived, setShowArchived] = useState(false);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [pending, startTransition] = useTransition();
   const visible = showArchived ? items : items.filter((item) => item.active);
+
+  function applySelection() {
+    if (!selection) return;
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("supplementId", String(selection.supplementId));
+      fd.set("day", selection.day);
+      fd.set("taken", selection.taken ? "1" : "0");
+      const result = await toggleSupplementAction({ ok: true }, fd);
+      if (!result.ok) {
+        toast.error(result.error ?? "Could not update intake");
+        return;
+      }
+      toast.success(selection.taken ? "Marked as taken" : "Marked as not taken");
+      setSelection(null);
+      router.refresh();
+    });
+  }
 
   if (items.length === 0) {
     return <p className="text-sm text-muted-foreground">No supplements to track yet.</p>;
@@ -98,7 +116,7 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Sunday-start weeks. Click any past or current day dot to toggle intake.
+          Sunday-start weeks. Click any past or current day dot to change intake.
         </p>
         <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground">
           <input
@@ -163,7 +181,6 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
                         {WEEKDAYS[weekdayIndex(day.day)].slice(0, 2)}
                       </span>
                       <DayDot
-                        supplementId={item.supplementId}
                         supplementName={item.name}
                         day={day}
                         label={`${weekdayShort(day.day)} ${day.day.slice(5)}: ${
@@ -175,6 +192,15 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
                                 ? "scheduled later"
                                 : "not taken"
                         }`}
+                        onSelect={() =>
+                          setSelection({
+                            supplementId: item.supplementId,
+                            supplementName: item.name,
+                            day: day.day,
+                            taken: !day.taken,
+                            label: `${weekdayShort(day.day)} ${day.day.slice(5)}`,
+                          })
+                        }
                       />
                     </div>
                   ))}
@@ -199,6 +225,34 @@ export function AdherenceGrid({ items }: { items: SupplementAdherence[] }) {
           })}
         </ul>
       )}
+
+      <LogDialog
+        open={selection !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelection(null);
+        }}
+        title={selection ? `Update ${selection.supplementName}` : "Update intake"}
+        description={selection ? `${selection.label} · ${selection.taken ? "mark as taken" : "mark as not taken"}` : undefined}
+        size="sm"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={pending}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="button" onClick={applySelection} disabled={pending} aria-busy={pending}>
+              Save
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          {selection
+            ? `Record ${selection.supplementName} as ${selection.taken ? "taken" : "not taken"} on ${selection.label}?`
+            : ""}
+        </p>
+      </LogDialog>
     </div>
   );
 }

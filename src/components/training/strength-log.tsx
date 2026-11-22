@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Bar,
   CartesianGrid,
@@ -18,8 +18,11 @@ import {
   updateStrengthSetAction,
 } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { useAutoOpenHash } from "@/hooks/use-auto-open-hash";
+import { LogDialog } from "@/components/log-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { ActionState } from "@/lib/action-state";
@@ -58,11 +61,13 @@ function StrengthForm({
   units,
   exercises,
   workoutOptions,
+  onSuccess,
 }: {
   today: string;
   units: Units;
   exercises: string[];
   workoutOptions: StrengthWorkoutOption[];
+  onSuccess?: () => void;
 }) {
   const [state, formAction] = useActionState<ActionState, FormData>(logStrengthSetsAction, { ok: true });
   const [rows, setRows] = useState<SetRow[]>([{ id: 0 }]);
@@ -73,15 +78,17 @@ function StrengthForm({
   useEffect(() => {
     if (!state.ok || !state.message) return;
     formRef.current?.reset();
-  }, [state]);
+    onSuccess?.();
+  }, [state, onSuccess]);
 
   const dayWorkouts = workoutOptions.filter((option) => option.day === day);
 
   return (
     <form
       ref={formRef}
+      id="strength-form"
       action={formAction}
-      className="flex flex-col gap-3 rounded-xl border border-border p-4"
+      className="flex flex-col gap-3"
     >
       <div className="flex flex-col gap-3 sm:flex-row">
         <Field label="Exercise" className="w-full sm:flex-1">
@@ -184,20 +191,51 @@ function StrengthForm({
         </Field>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <SubmitButton>Log sets</SubmitButton>
-        {state.error ? (
-          <p role="alert" className="text-xs text-destructive">
-            {state.error}
-          </p>
-        ) : null}
-        {state.ok && state.message ? (
-          <p role="status" className="text-xs text-muted-foreground">
-            {state.message}
-          </p>
-        ) : null}
-      </div>
+      {state.error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {state.error}
+        </p>
+      ) : null}
+      {state.ok && state.message ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          {state.message}
+        </p>
+      ) : null}
     </form>
+  );
+}
+
+function StrengthLogButton(props: {
+  today: string;
+  units: Units;
+  exercises: string[];
+  workoutOptions: StrengthWorkoutOption[];
+}) {
+  const [open, setOpen] = useAutoOpenHash("#log-strength");
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)}>
+        <Plus aria-hidden />
+        Log strength set
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Log strength set"
+        description="Reps and load are saved as training detail — no workout or calories are added."
+        size="lg"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="strength-form">Log sets</Button>
+          </>
+        }
+      >
+        <StrengthForm {...props} onSuccess={() => setOpen(false)} />
+      </LogDialog>
+    </>
   );
 }
 
@@ -243,15 +281,29 @@ function SetDetailRow({ set, units }: { set: StrengthSet; units: Units }) {
         </div>
       </div>
 
-      {editing ? (
+      <LogDialog
+        open={editing}
+        onOpenChange={setEditing}
+        title={`Edit set #${set.setNo}`}
+        description={set.exercise}
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form={`set-form-${set.id}`}>Save set</Button>
+          </>
+        }
+      >
         <ActionForm
+          id={`set-form-${set.id}`}
           action={updateStrengthSetAction}
           onSuccess={() => setEditing(false)}
-          className="grid gap-2 rounded-lg border border-border/80 bg-muted/20 p-2.5 sm:grid-cols-4"
+          className="grid gap-3 sm:grid-cols-2"
         >
           <input type="hidden" name="id" value={set.id} />
           <Field label="Exercise" className="sm:col-span-2">
-            <Input name="exercise" defaultValue={set.exercise} required maxLength={120} className="h-8 text-xs" />
+            <Input name="exercise" defaultValue={set.exercise} required maxLength={120} />
           </Field>
           <Field label="Reps">
             <Input
@@ -262,7 +314,6 @@ function SetDetailRow({ set, units }: { set: StrengthSet; units: Units }) {
               max={1000}
               step="any"
               defaultValue={set.reps ?? ""}
-              className="h-8 text-xs"
             />
           </Field>
           <Field label={`Load (${weightUnit(units)})`}>
@@ -274,20 +325,13 @@ function SetDetailRow({ set, units }: { set: StrengthSet; units: Units }) {
               max={units === "imperial" ? 2204 : 1000}
               step="any"
               defaultValue={displayLoadValue(set.loadKg, units)}
-              className="h-8 text-xs"
             />
           </Field>
-          <Field label="Note" className="sm:col-span-3">
-            <Input name="note" defaultValue={set.note ?? ""} maxLength={1000} className="h-8 text-xs" />
+          <Field label="Note" className="sm:col-span-2">
+            <Input name="note" defaultValue={set.note ?? ""} maxLength={1000} />
           </Field>
-          <div className="flex items-end justify-end gap-1">
-            <Button type="button" variant="ghost" size="xs" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-            <SubmitButton size="xs">Save</SubmitButton>
-          </div>
         </ActionForm>
-      ) : null}
+      </LogDialog>
     </li>
   );
 }
@@ -592,7 +636,9 @@ export function StrengthLogSection({
         <p className="text-xs text-muted-foreground">{plural(sessionsThisWeek, "day")} logged this week</p>
       </div>
 
-      <StrengthForm today={today} units={units} exercises={exercises} workoutOptions={workoutOptions} />
+      <div>
+        <StrengthLogButton today={today} units={units} exercises={exercises} workoutOptions={workoutOptions} />
+      </div>
 
       <div className="flex flex-col gap-2">
         <h3 className="text-sm font-medium">Recent sessions</h3>

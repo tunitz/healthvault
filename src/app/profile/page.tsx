@@ -10,7 +10,7 @@ import { currentDay } from "@/lib/services/context";
 import { num } from "@/lib/format";
 import { formatHeight, formatWaist, formatWeight, resolveUnits } from "@/lib/units";
 import { ProfileForm, WorkScheduleForm } from "@/components/profile/profile-form";
-import { MeasurementForm } from "@/components/profile/measurement-form";
+import { MeasurementLog } from "@/components/profile/measurement-form";
 import { MeasurementTabs } from "@/components/profile/measurement-tabs";
 import { SubviewNav } from "@/components/subviews/subview-header";
 
@@ -103,9 +103,12 @@ export default function ProfilePage() {
           <Metric label="Waist" value={formatLatest(latestWaist, "waist", units)} hint={latestWaist?.day ?? "Manual only"} />
         </div>
 
-        <div className="rounded-xl border border-border p-4">
-          <h3 className="mb-3 text-sm font-medium">Add a measurement</h3>
-          <MeasurementForm today={today} defaultTime={localClockNow(timezone)} units={units} />
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border p-4">
+          <div className="flex flex-col gap-0.5">
+            <h3 className="text-sm font-medium">Add a measurement</h3>
+            <p className="text-xs text-muted-foreground">Weight, body fat or waist.</p>
+          </div>
+          <MeasurementLog today={today} defaultTime={localClockNow(timezone)} units={units} />
         </div>
 
         <MeasurementTabs

@@ -3,6 +3,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { logWheyAction, saveWheyLinkAction, undoWheyAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { LogDialog } from "@/components/log-dialog";
+import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { WheyLink } from "@/lib/services/profile";
 
@@ -29,19 +32,43 @@ export type WheySupplementOption = {
   active: boolean;
 };
 
-/** One tap logs the configured serving and marks the linked supplement; Undo reverses both. */
+/** Logging the configured whey serving happens in a popup; Undo stays a single undo action. */
 export function WheyLogButtons({ configured, canUndo }: { configured: boolean; canUndo: boolean }) {
   // Undo succeeds outside the Log form's own action state, so remount that form to clear a
   // stale "Already logged..." error (the duplicate guard) without waiting for a page reload.
   const [logFormKey, setLogFormKey] = useState(0);
+  const [open, setOpen] = useState(false);
   const clearLogState = useCallback(() => setLogFormKey((key) => key + 1), []);
   if (!configured && !canUndo) return null;
   return (
     <div className="flex flex-wrap items-start gap-2">
       {configured && !canUndo ? (
-        <ActionForm key={logFormKey} action={logWheyAction}>
-          <SubmitButton size="sm">Log whey</SubmitButton>
-        </ActionForm>
+        <>
+          <Button type="button" onClick={() => setOpen(true)}>
+            Log whey
+          </Button>
+          <LogDialog
+            open={open}
+            onOpenChange={setOpen}
+            title="Log whey"
+            description="Records the configured serving and marks the linked supplement for today."
+            size="sm"
+            footer={
+              <>
+                <DialogClose asChild>
+                  <Button variant="outline">Cancel</Button>
+                </DialogClose>
+                <Button type="submit" form="whey-log-form">Log whey</Button>
+              </>
+            }
+          >
+            <ActionForm id="whey-log-form" key={logFormKey} action={logWheyAction} onSuccess={() => setOpen(false)}>
+              <p className="text-sm text-muted-foreground">
+                One serving will be added to today&apos;s diary. You can undo it afterwards.
+              </p>
+            </ActionForm>
+          </LogDialog>
+        </>
       ) : null}
       {canUndo ? (
         <ActionForm action={undoWheyAction} onSuccess={clearLogState}>

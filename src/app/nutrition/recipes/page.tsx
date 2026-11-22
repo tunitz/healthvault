@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Plus, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
+import { listFoods } from "@/lib/services/nutrition";
 import { listRecipes, recipeTotalsBatch } from "@/lib/services/recipes";
+import { measureDefaults } from "@/lib/services/measures";
+import { recipeFoodOption } from "@/lib/recipes-ui";
 import { getTimezone } from "@/lib/services/profile";
 import { instant, num, plural } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { DeleteRecipeForm } from "@/components/nutrition/recipe-forms";
+import { DeleteRecipeForm, NewRecipeDialog } from "@/components/nutrition/recipe-forms";
 import { NutritionNav } from "@/components/nutrition/nutrition-nav";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +66,8 @@ export default async function RecipesPage(props: {
   }
   const totalsByRecipe = recipeTotalsBatch(result.items);
   const timezone = getTimezone();
+  const initialFoods = listFoods({ limit: 100 }).items.map(recipeFoodOption);
+  const defaultMeasures = measureDefaults();
 
   return (
     <div className="flex flex-col gap-8">
@@ -74,12 +79,7 @@ export default async function RecipesPage(props: {
               {plural(result.total, "recipe")} · totals are computed from the ingredients
             </p>
           </div>
-          <Button asChild size="sm">
-            <Link href="/nutrition/recipes/new">
-              <Plus aria-hidden />
-              New recipe
-            </Link>
-          </Button>
+          <NewRecipeDialog initialFoods={initialFoods} defaultMeasures={defaultMeasures} />
         </div>
       </div>
 

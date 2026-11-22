@@ -1,8 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import { addMeasurementAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { useAutoOpenHash } from "@/hooks/use-auto-open-hash";
+import { LogDialog } from "@/components/log-dialog";
+import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { waistUnit, weightUnit, type Units } from "@/lib/units";
 
@@ -19,10 +24,12 @@ export function MeasurementForm({
   today,
   defaultTime,
   units,
+  onSuccess,
 }: {
   today: string;
   defaultTime: string;
   units: Units;
+  onSuccess?: () => void;
 }) {
   const [kind, setKind] = useState<keyof typeof KIND_LABEL>("weight");
   const meta = KIND_LABEL[kind];
@@ -32,7 +39,7 @@ export function MeasurementForm({
     kind === "weight" ? (units === "imperial" ? "176" : "80") : kind === "bodyFat" ? "20" : units === "imperial" ? "35" : "90";
 
   return (
-    <ActionForm action={addMeasurementAction} resetOnSuccess className="grid gap-3 sm:grid-cols-2">
+    <ActionForm id="measurement-form" action={addMeasurementAction} resetOnSuccess onSuccess={onSuccess} className="grid gap-3 sm:grid-cols-2">
       <Field label="Kind">
         <select name="kind" value={kind} onChange={(event) => setKind(event.target.value as keyof typeof KIND_LABEL)} className={SELECT}>
           <option value="weight">Weight</option>
@@ -69,10 +76,36 @@ export function MeasurementForm({
       <Field label="Note" className="sm:col-span-2">
         <Input name="note" placeholder="Optional" maxLength={1000} />
       </Field>
-
-      <div className="sm:col-span-2 flex justify-end">
-        <SubmitButton>Add measurement</SubmitButton>
-      </div>
     </ActionForm>
+  );
+}
+
+/** Entry point used on Profile and Measurements: one button, one popup form. */
+export function MeasurementLog(props: { today: string; defaultTime: string; units: Units }) {
+  const [open, setOpen] = useAutoOpenHash("#log-measurement");
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)}>
+        <Plus aria-hidden />
+        Add measurement
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Add measurement"
+        description="Weight, body fat or waist — saved with the day and local time you choose."
+        size="sm"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <SubmitButton form="measurement-form">Add measurement</SubmitButton>
+          </>
+        }
+      >
+        <MeasurementForm {...props} onSuccess={() => setOpen(false)} />
+      </LogDialog>
+    </>
   );
 }

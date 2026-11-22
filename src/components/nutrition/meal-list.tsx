@@ -5,8 +5,10 @@ import { useMemo, useState, useTransition, type ReactNode } from "react";
 import { ChevronDown, History, Plus } from "lucide-react";
 import { deleteEntryAction, entryRevisionsAction, updateEntryAction, updateLegacyEntryAction, updatePortionAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { LogDialog } from "@/components/log-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { instant, num, plural } from "@/lib/format";
 import {
@@ -174,7 +176,15 @@ function SnapshotSection({ entry }: { entry: LoggedIngredientEntry }) {
  * Portion form (recipe entries only)
  * ------------------------------------------------------------------------------------------- */
 
-function PortionForm({ entry }: { entry: LoggedIngredientEntry }) {
+function PortionForm({
+  entry,
+  formId,
+  onSuccess,
+}: {
+  entry: LoggedIngredientEntry;
+  formId: string;
+  onSuccess?: () => void;
+}) {
   const stored = parseStoredServing(entry.recipeServingJson);
   const fraction = entry.servingFraction && entry.servingFraction > 0 ? entry.servingFraction : 1;
 
@@ -189,7 +199,7 @@ function PortionForm({ entry }: { entry: LoggedIngredientEntry }) {
   }
 
   return (
-    <ActionForm action={updatePortionAction} className="mt-2 flex flex-col gap-2">
+    <ActionForm id={formId} action={updatePortionAction} onSuccess={onSuccess} className="flex flex-col gap-3">
       <input type="hidden" name="id" value={entry.id} />
       <div className="grid grid-cols-2 items-end gap-2">
         <Field label="Portion" hint={`1 = one serving · ${num(stored.grams)} g and ${num(stored.kcal, 0)} kcal each`}>
@@ -258,12 +268,6 @@ function PortionForm({ entry }: { entry: LoggedIngredientEntry }) {
       <p id={`fixed-macros-${entry.id}`} className="text-xs text-muted-foreground">
         Edit the portion instead — macros come from the ingredients.
       </p>
-
-      <div className="flex items-center justify-end">
-        <SubmitButton size="sm" pendingLabel="Saving…">
-          Save portion
-        </SubmitButton>
-      </div>
     </ActionForm>
   );
 }
@@ -348,13 +352,17 @@ function Revisions({ entry, timezone }: { entry: LoggedIngredientEntry; timezone
 
 function PlainFoodEdit({
   entry,
+  formId,
   action = updateEntryAction,
+  onSuccess,
 }: {
   entry: LoggedIngredientEntry;
+  formId: string;
   action?: typeof updateEntryAction;
+  onSuccess?: () => void;
 }) {
   return (
-    <ActionForm action={action} className="mt-2 grid gap-2">
+    <ActionForm id={formId} action={action} onSuccess={onSuccess} className="grid gap-3">
       <input type="hidden" name="id" value={entry.id} />
       <input type="hidden" name="old-kcal" value={entry.kcal} />
       <input type="hidden" name="old-proteinG" value={entry.proteinG} />
@@ -380,7 +388,7 @@ function PlainFoodEdit({
             name="grams"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0.1"
             defaultValue={entry.grams}
             required
@@ -392,7 +400,7 @@ function PlainFoodEdit({
             name="kcal"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0"
             defaultValue={entry.kcal}
             className="max-sm:h-11"
@@ -403,7 +411,7 @@ function PlainFoodEdit({
             name="proteinG"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0"
             defaultValue={entry.proteinG}
             className="max-sm:h-11"
@@ -414,7 +422,7 @@ function PlainFoodEdit({
             name="carbsG"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0"
             defaultValue={entry.carbsG}
             className="max-sm:h-11"
@@ -425,7 +433,7 @@ function PlainFoodEdit({
             name="fatG"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0"
             defaultValue={entry.fatG}
             className="max-sm:h-11"
@@ -436,7 +444,7 @@ function PlainFoodEdit({
             name="fibreG"
             type="number"
             inputMode="decimal"
-            step="0.1"
+            step="any"
             min="0"
             defaultValue={entry.fibreG}
             className="max-sm:h-11"
@@ -447,7 +455,7 @@ function PlainFoodEdit({
             name="sodiumMg"
             type="number"
             inputMode="decimal"
-            step="1"
+            step="any"
             min="0"
             defaultValue={entry.sodiumMg}
             className="max-sm:h-11"
@@ -463,9 +471,6 @@ function PlainFoodEdit({
         />
         Macros are estimated
       </label>
-      <div className="flex items-center justify-end">
-        <SubmitButton size="sm">Save</SubmitButton>
-      </div>
     </ActionForm>
   );
 }
@@ -476,7 +481,15 @@ function PlainFoodEdit({
  * totals form is offered only when there are genuinely no child rows; otherwise the card says
  * what the service would say instead of letting the form fail.
  */
-function LegacyEdit({ entry }: { entry: LoggedIngredientEntry }) {
+function LegacyEdit({
+  entry,
+  formId,
+  onSuccess,
+}: {
+  entry: LoggedIngredientEntry;
+  formId: string;
+  onSuccess?: () => void;
+}) {
   if (entry.ingredients.length > 0) {
     return (
       <p className="mt-2 text-xs text-muted-foreground">
@@ -492,7 +505,7 @@ function LegacyEdit({ entry }: { entry: LoggedIngredientEntry }) {
         Editing these totals changes only this entry. No ingredient details were recorded, so
         there is no breakdown to keep in step.
       </p>
-      <PlainFoodEdit entry={entry} action={updateLegacyEntryAction} />
+      <PlainFoodEdit entry={entry} formId={formId} action={updateLegacyEntryAction} onSuccess={onSuccess} />
     </div>
   );
 }
@@ -509,6 +522,8 @@ function EntryCard({ entry, timezone }: { entry: LoggedIngredientEntry; timezone
   const stored = parseStoredServing(entry.recipeServingJson);
   const fraction = entry.servingFraction && entry.servingFraction > 0 ? entry.servingFraction : 1;
   const [editing, setEditing] = useState(false);
+  const formId = `entry-form-${entry.id}`;
+  const isPortion = entry.ingredientSnapshotComplete === true && stored !== null;
 
   return (
     <li className="py-3">
@@ -539,29 +554,42 @@ function EntryCard({ entry, timezone }: { entry: LoggedIngredientEntry; timezone
         type="button"
         variant="ghost"
         size="sm"
-        onClick={() => setEditing((current) => !current)}
-        aria-expanded={editing}
+        onClick={() => setEditing(true)}
         className="mt-1 h-11 px-2 text-xs text-muted-foreground sm:h-8"
       >
-        {editing ? "Close edit" : "Edit"}
+        Edit
       </Button>
 
-      {editing ? (
-        <div className="mt-1">
-          {entry.ingredientSnapshotComplete === null ? (
-            <PlainFoodEdit entry={entry} />
-          ) : entry.ingredientSnapshotComplete === true && stored !== null ? (
-            <PortionForm entry={entry} />
-          ) : (
-            /*
-             * A legacy row (ingredients never recorded) or a partial child snapshot. A rescaled
-             * portion would either invent the arithmetic or leave missing child rows behind the
-             * parent's new totals, so only the cases with no children at all offer a totals edit.
-             */
-            <LegacyEdit entry={entry} />
-          )}
-        </div>
-      ) : null}
+      <LogDialog
+        open={editing}
+        onOpenChange={setEditing}
+        title="Edit entry"
+        description={entry.name}
+        size="lg"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <SubmitButton form={formId} pendingLabel="Saving…">
+              {isPortion ? "Save portion" : "Save"}
+            </SubmitButton>
+          </>
+        }
+      >
+        {entry.ingredientSnapshotComplete === null ? (
+          <PlainFoodEdit entry={entry} formId={formId} onSuccess={() => setEditing(false)} />
+        ) : isPortion ? (
+          <PortionForm entry={entry} formId={formId} onSuccess={() => setEditing(false)} />
+        ) : (
+          /*
+           * A legacy row (ingredients never recorded) or a partial child snapshot. A rescaled
+           * portion would either invent the arithmetic or leave missing child rows behind the
+           * parent's new totals, so only the cases with no children at all offer a totals edit.
+           */
+          <LegacyEdit entry={entry} formId={formId} onSuccess={() => setEditing(false)} />
+        )}
+      </LogDialog>
 
       <ActionForm
         action={deleteEntryAction}

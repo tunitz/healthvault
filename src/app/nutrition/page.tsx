@@ -402,8 +402,20 @@ export default async function NutritionPage(props: {
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <NewFoodForm />
-        <TargetsForm day={day} targets={data.targets as Targets} />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-sm font-medium">New food</h2>
+            <p className="text-xs text-muted-foreground">Add a reusable food to the library.</p>
+          </div>
+          <NewFoodForm />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-sm font-medium">Targets</h2>
+            <p className="text-xs text-muted-foreground">Daily kcal and macro goals.</p>
+          </div>
+          <TargetsForm day={day} targets={data.targets as Targets} />
+        </div>
       </div>
 
       <section className="flex flex-col gap-3">

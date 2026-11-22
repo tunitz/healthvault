@@ -21,7 +21,7 @@ import { cloneRecipeAction, unarchiveRecipeAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   DeleteRecipeForm,
-  RecipeLogForm,
+  RecipeLogButton,
   type LogIngredient,
 } from "@/components/nutrition/recipe-forms";
 
@@ -269,7 +269,9 @@ export default async function RecipeDetailPage(props: { params: Promise<{ id: st
                   ) : null}
                   {ingredient.resolved ? (
                     ingredient.source ? (
-                      <Badge variant="outline">{ingredient.source}</Badge>
+                      <Badge variant="outline" className="max-w-full truncate" title={ingredient.source ?? undefined}>
+                        {ingredient.source}
+                      </Badge>
                     ) : null
                   ) : (
                     <Badge variant="outline">unresolved</Badge>
@@ -340,8 +342,13 @@ export default async function RecipeDetailPage(props: { params: Promise<{ id: st
                 : "One-time amounts apply to this meal only. The saved recipe is never changed, and the entry keeps its own ingredient snapshot."}
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <RecipeLogForm
+          <CardContent className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {nextServing === null
+                ? "Every serving has a logged ingredient snapshot."
+                : `Next unlogged serving: ${nextServing} of ${recipe.servingsTotal}.`}
+            </p>
+            <RecipeLogButton
               key={recipe.id}
               recipeId={recipe.id}
               servingsTotal={recipe.servingsTotal}

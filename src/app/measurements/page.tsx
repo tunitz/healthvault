@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { MeasurementForm } from "@/components/profile/measurement-form";
+import { MeasurementLog } from "@/components/profile/measurement-form";
 import { MeasurementTabs } from "@/components/profile/measurement-tabs";
 import { SubviewHeader } from "@/components/subviews/subview-header";
 import { localClockNow } from "@/lib/day";
@@ -60,8 +60,8 @@ export default function MeasurementsPage() {
           <h2 id="add-measurement" className="text-sm font-medium">Add a measurement</h2>
           <p className="text-xs text-muted-foreground">Saved with the day and local time you choose.</p>
         </div>
-        <div className="rounded-xl border border-border p-4">
-          <MeasurementForm today={today} defaultTime={localClockNow(timezone)} units={units} />
+        <div>
+          <MeasurementLog today={today} defaultTime={localClockNow(timezone)} units={units} />
         </div>
       </section>
 

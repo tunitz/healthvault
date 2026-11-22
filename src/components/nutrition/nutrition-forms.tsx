@@ -3,14 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { copyDayAction, setTargetsAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { useAutoOpenHash } from "@/hooks/use-auto-open-hash";
+import { LogDialog } from "@/components/log-dialog";
 import { FoodForm } from "@/components/nutrition/food-forms";
 import { MealList } from "@/components/nutrition/meal-list";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { num } from "@/lib/format";
 import {
@@ -35,7 +38,7 @@ import type { LoggedIngredientEntry } from "@/lib/services/food-log-snapshots";
 import type { Meal, Targets } from "@/lib/services/nutrition";
 
 const SELECT =
-  "h-11 max-sm:h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "h-11 sm:h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 const MEALS: { value: Meal; label: string }[] = [
   { value: "breakfast", label: "Breakfast" },
@@ -103,11 +106,9 @@ export function Diary({
   saveDraft,
 }: DiaryProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useAutoOpenHash("#log-food");
   const [draft, setDraft] = useState<MealDraft>(() => ({ day, meal: defaultMeal, time: "", items: [] }));
   const [hydrated, setHydrated] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const scrollOnOpenRef = useRef(false);
   const storageKey = mealDraftStorageKey(day);
 
   const setMeal = (meal: Meal) => setDraft((current) => ({ ...current, meal }));
@@ -135,19 +136,8 @@ export function Diary({
     if (draft.day !== day) window.localStorage.removeItem(storageKey);
   }, [draft, hydrated, day, storageKey]);
 
-  useEffect(() => {
-    if (!open || !scrollOnOpenRef.current) return;
-    scrollOnOpenRef.current = false;
-    const panel = panelRef.current;
-    if (!panel) return;
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
-    const firstInput = panel.querySelector<HTMLElement>("input:not([type='hidden']), select, button");
-    (firstInput ?? panel).focus({ preventScroll: true });
-  }, [open]);
-
   const addToMeal = (meal: Meal) => {
     setMeal(meal);
-    scrollOnOpenRef.current = true;
     setOpen(true);
   };
 
@@ -161,9 +151,8 @@ export function Diary({
         <Button
           type="button"
           size="sm"
-          onClick={() => setOpen((current) => !current)}
+          onClick={() => setOpen(!open)}
           aria-expanded={open}
-          aria-controls="add-food-panel"
           className="min-h-11"
         >
           <Plus aria-hidden />
@@ -172,32 +161,31 @@ export function Diary({
         </Button>
       </div>
 
-      {open ? (
-        <div
-          id="add-food-panel"
-          ref={panelRef}
-          tabIndex={-1}
-          className="scroll-mt-20 rounded-xl border border-border p-3 outline-none sm:p-4"
-        >
-          <AddFoodPanel
-            draft={draft}
-            update={update}
-            setDraft={setDraft}
-            recent={recent}
-            recipes={recipes}
-            initialFoods={initialFoods}
-            searchFoods={searchFoods}
-            previewEntry={previewEntry}
-            previewRecipe={previewRecipe}
-            saveDraft={saveDraft}
-            onDone={() => {
-              setDraft({ day, meal: draft.meal, time: "", items: [] });
-              setOpen(false);
-              router.refresh();
-            }}
-          />
-        </div>
-      ) : null}
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Add food"
+        description="Pick saved foods or recipes, or enter a one-off item. Save once for the whole meal."
+        size="lg"
+      >
+        <AddFoodPanel
+          draft={draft}
+          update={update}
+          setDraft={setDraft}
+          recent={recent}
+          recipes={recipes}
+          initialFoods={initialFoods}
+          searchFoods={searchFoods}
+          previewEntry={previewEntry}
+          previewRecipe={previewRecipe}
+          saveDraft={saveDraft}
+          onDone={() => {
+            setDraft({ day, meal: draft.meal, time: "", items: [] });
+            setOpen(false);
+            router.refresh();
+          }}
+        />
+      </LogDialog>
 
       <MealList meals={meals} timezone={timezone} onAddToMeal={addToMeal} />
     </section>
@@ -215,6 +203,19 @@ type PreviewState = { preview?: LoggingPreview; error?: string };
 
 type Tab = "food" | "recipe" | "quick";
 
+/** Recently logged foods come first in the saved-food list; the old chip row is gone. */
+function orderFoodsByRecent(foods: LoggingFoodOption[], recent: RecentFoodOption[]) {
+  const rank = new Map<number, number>();
+  recent.forEach((row, index) => {
+    if (row.foodId !== null && !rank.has(row.foodId)) rank.set(row.foodId, index);
+  });
+  return [...foods].sort((a, b) => {
+    const aRank = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bRank = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    return aRank - bRank;
+  });
+}
+
 function AddFoodPanel({
   draft,
   update,
@@ -230,7 +231,7 @@ function AddFoodPanel({
 }: PanelProps) {
   const [tab, setTab] = useState<Tab>("food");
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<LoggingFoodOption[]>(initialFoods);
+  const [results, setResults] = useState<LoggingFoodOption[]>(() => orderFoodsByRecent(initialFoods, recent));
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
@@ -248,7 +249,7 @@ function AddFoodPanel({
     const handle = setTimeout(async () => {
       if (!needle) {
         if (cancelled) return;
-        setResults(initialFoods);
+        setResults(orderFoodsByRecent(initialFoods, recent));
         setSearchError(null);
         setSearching(false);
         return;
@@ -258,7 +259,7 @@ function AddFoodPanel({
         const response = await searchFoods(needle);
         if (cancelled) return;
         if (response.ok) {
-          setResults(response.items);
+          setResults(orderFoodsByRecent(response.items, recent));
           setSearchError(null);
         } else {
           setSearchError(response.error);
@@ -273,7 +274,7 @@ function AddFoodPanel({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [query, searchFoods, initialFoods]);
+  }, [query, searchFoods, initialFoods, recent]);
 
   // Live preview uses the service arithmetic through a read-only action. It is debounced so a
   // fast typist does not fire a request per keystroke.
@@ -319,30 +320,6 @@ function AddFoodPanel({
   };
 
   const addFood = (food: LoggingFoodOption) => addItem(draftItemFromFood(food, uid("food")));
-
-  const addRecent = async (row: RecentFoodOption) => {
-    if (row.food) {
-      addFood(row.food);
-      return;
-    }
-    if (row.foodId !== null) {
-      const response = await searchFoods(row.name);
-      const match = response.ok ? response.items.find((food) => food.id === row.foodId) : undefined;
-      if (match) addFood(match);
-      else toast.error("That food is no longer in the library");
-      return;
-    }
-    addItem({
-      key: uid("recent"),
-      kind: "custom",
-      label: row.name,
-      quantity: String(Math.round(row.grams)),
-      unit: "g",
-      basis: "",
-      weightSource: "guessed",
-      kcal: String(Math.round(row.kcal)),
-    });
-  };
 
   const addRecipe = (recipe: LoggingRecipeOption) =>
     addItem({
@@ -478,23 +455,6 @@ function AddFoodPanel({
             />
           </div>
           {searchError ? <p role="alert" className="text-xs text-destructive">{searchError}</p> : null}
-          {recent.length > 0 ? (
-            <div className="flex flex-col gap-1">
-              <p className="text-[11px] font-medium text-muted-foreground">Recent</p>
-              <div className="flex flex-wrap gap-1.5">
-                {recent.map((row) => (
-                  <button
-                    key={`${row.name}-${row.foodId ?? "raw"}`}
-                    type="button"
-                    onClick={() => void addRecent(row)}
-                    className="min-h-11 rounded-lg border border-border px-2.5 text-xs hover:bg-muted"
-                  >
-                    {row.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
           <ul className="flex max-h-64 flex-col divide-y divide-border/60 overflow-auto rounded-lg border border-border">
             {searching ? <li className="px-3 py-2 text-xs text-muted-foreground">Searching…</li> : null}
             {!searching && results.length === 0 ? (
@@ -849,60 +809,104 @@ function QuickEntry({ onAdd }: { onAdd: (item: MealDraftItem) => void }) {
 }
 
 /** The daily New-food action uses the same shared editor as the Foods library. */
-export function NewFoodForm() {
+export function NewFoodForm({
+  cancelHref = "/nutrition",
+  label = "New food",
+}: {
+  cancelHref?: string;
+  label?: string;
+} = {}) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="rounded-xl border border-border">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">New food</summary>
-      <div className="border-t border-border p-4">
-        <FoodForm cancelHref="/nutrition" />
-      </div>
-    </details>
+    <>
+      <Button type="button" onClick={() => setOpen(true)}>
+        <Plus aria-hidden />
+        {label}
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={label}
+        description="Add a reusable food with its nutrition per 100 g."
+        size="lg"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="new-food-form">Save food</Button>
+          </>
+        }
+      >
+        <FoodForm formId="new-food-form" cancelHref={cancelHref} onSuccess={() => setOpen(false)} />
+      </LogDialog>
+    </>
   );
 }
 
 export function TargetsForm({ day, targets }: { day: string; targets: Targets }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="rounded-xl border border-border">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-        Targets <span className="ml-1 text-xs font-normal text-muted-foreground">{targets.source}</span>
-      </summary>
-      <ActionForm action={setTargetsAction} className="grid gap-3 border-t border-border p-4">
-        <input type="hidden" name="effectiveFrom" value={day} />
-        <p className="text-xs text-muted-foreground">
-          {targets.source === "suggested"
-            ? "Calculated from profile and latest weight. Saving makes them manual from this day."
-            : `Manual targets effective from ${targets.effectiveFrom}.`}
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="kcal">
-            <Input name="kcal" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.kcal)} required />
-          </Field>
-          <Field label="Protein (g)">
-            <Input name="proteinG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.proteinG)} />
-          </Field>
-          <Field label="Carbs (g)">
-            <Input name="carbsG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.carbsG)} />
-          </Field>
-          <Field label="Fat (g)">
-            <Input name="fatG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.fatG)} />
-          </Field>
-        </div>
-        <details>
-          <summary className="cursor-pointer py-3.5 text-xs text-muted-foreground sm:py-0">More targets</summary>
-          <div className="mt-2 grid grid-cols-2 gap-3">
-            <Field label="Fibre (g)">
-              <Input name="fibreG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.fibreG)} />
+    <>
+      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+        <Pencil aria-hidden />
+        Edit targets
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Edit targets"
+        description={`Saving creates manual targets effective from ${day}.`}
+        size="sm"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="targets-form">Save targets</Button>
+          </>
+        }
+      >
+        <ActionForm
+          id="targets-form"
+          action={setTargetsAction}
+          onSuccess={() => setOpen(false)}
+          className="grid gap-4"
+        >
+          <input type="hidden" name="effectiveFrom" value={day} />
+          <p className="text-xs text-muted-foreground">
+            {targets.source === "suggested"
+              ? "Calculated from profile and latest weight. Saving makes them manual from this day."
+              : `Manual targets effective from ${targets.effectiveFrom}.`}
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="kcal">
+              <Input name="kcal" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.kcal)} required />
             </Field>
-            <Field label="Sodium (mg)">
-              <Input name="sodiumMg" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.sodiumMg)} />
+            <Field label="Protein (g)">
+              <Input name="proteinG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.proteinG)} />
+            </Field>
+            <Field label="Carbs (g)">
+              <Input name="carbsG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.carbsG)} />
+            </Field>
+            <Field label="Fat (g)">
+              <Input name="fatG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.fatG)} />
             </Field>
           </div>
-        </details>
-        <div className="flex justify-end">
-          <SubmitButton size="sm">Save targets</SubmitButton>
-        </div>
-      </ActionForm>
-    </details>
+          <details className="rounded-lg border border-border p-3">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">More targets</summary>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Field label="Fibre (g)">
+                <Input name="fibreG" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.fibreG)} />
+              </Field>
+              <Field label="Sodium (mg)">
+                <Input name="sodiumMg" type="number" inputMode="decimal" step="1" min="0" defaultValue={Math.round(targets.sodiumMg)} />
+              </Field>
+            </div>
+          </details>
+        </ActionForm>
+      </LogDialog>
+    </>
   );
 }
 
@@ -925,17 +929,31 @@ export function CopyDayForm({ day, previousDay }: { day: string; previousDay: st
           type="button"
           variant="ghost"
           size="sm"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setOpen(true)}
         >
-          {open ? "Close copy" : "Copy meal / date…"}
+          Copy meal / date…
         </Button>
       </div>
-      {open ? (
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Copy meals"
+        description={`Copy entries into ${day}. Choose a source date and, optionally, one meal.`}
+        size="sm"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="copy-day-form">Copy meals</Button>
+          </>
+        }
+      >
         <ActionForm
+          id="copy-day-form"
           action={copyDayAction}
           onSuccess={() => setOpen(false)}
-          className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card p-2.5"
+          className="grid gap-3"
         >
           <input type="hidden" name="toDay" value={day} />
           <Field label="From date">
@@ -944,7 +962,6 @@ export function CopyDayForm({ day, previousDay }: { day: string; previousDay: st
               name="fromDay"
               value={fromDay}
               onChange={(e) => setFromDay(e.target.value)}
-              className="h-8 w-36 max-sm:h-11"
               required
             />
           </Field>
@@ -962,9 +979,8 @@ export function CopyDayForm({ day, previousDay }: { day: string; previousDay: st
               <option value="snack">Snack</option>
             </select>
           </Field>
-          <SubmitButton size="sm">Copy</SubmitButton>
         </ActionForm>
-      ) : null}
+      </LogDialog>
     </div>
   );
 }

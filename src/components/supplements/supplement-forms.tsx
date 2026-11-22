@@ -1,10 +1,17 @@
 "use client";
 
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { archiveSupplementAction, saveSupplementAction, toggleSupplementAction } from "@/app/actions";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
+import { useAutoOpenHash } from "@/hooks/use-auto-open-hash";
+import { LogDialog } from "@/components/log-dialog";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DialogClose } from "@/components/ui/dialog";
+import { Field as FormField, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
 import { num } from "@/lib/format";
 import type { ChecklistItem, Supplement } from "@/lib/services/supplements";
 
@@ -19,47 +26,104 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 type Schedule = { time: string | null; days: number[] | null; note?: string };
 type Item = { supplement: Supplement; schedule: Schedule };
 
+/** All of today's doses are recorded in one popup instead of a row of inline toggles. */
 export function SupplementChecklist({ day, items }: { day: string; items: ChecklistItem[] }) {
+  const router = useRouter();
+  const [open, setOpen] = useAutoOpenHash("#log-supplements");
+  const [overrides, setOverrides] = useState<Record<number, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
   if (items.length === 0) {
     return <p className="text-sm text-muted-foreground">No supplement scheduled for today.</p>;
   }
 
+  const takenOf = (item: ChecklistItem) => overrides[item.supplement.id] ?? item.logged;
+  const count = items.filter(takenOf).length;
+
+  function save() {
+    const changed = items.filter((item) => takenOf(item) !== item.logged);
+    if (changed.length === 0) {
+      setOpen(false);
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      try {
+        for (const item of changed) {
+          const fd = new FormData();
+          fd.set("supplementId", String(item.supplement.id));
+          fd.set("day", day);
+          fd.set("taken", takenOf(item) ? "1" : "0");
+          const result = await toggleSupplementAction({ ok: true }, fd);
+          if (!result.ok) throw new Error(result.error ?? "Could not update intake");
+        }
+        setOverrides({});
+        setOpen(false);
+        router.refresh();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not update intake");
+      }
+    });
+  }
+
   return (
-    <ul className="divide-y divide-border/60">
-      {items.map(({ supplement, schedule, logged }) => (
-        <li key={supplement.id} className="flex items-center gap-3 py-2.5">
-          <ActionForm action={toggleSupplementAction} className="flex flex-1 items-center gap-3">
-            <input type="hidden" name="supplementId" value={supplement.id} />
-            <input type="hidden" name="day" value={day} />
-            <input type="hidden" name="taken" value={logged ? "0" : "1"} />
-            <SubmitButton
-              variant={logged ? "secondary" : "outline"}
-              size="icon"
-              pendingLabel={<Spinner className="size-3.5" />}
-              aria-label={logged ? `Mark ${supplement.name} untaken` : `Mark ${supplement.name} taken`}
-              className={cn("size-9 shrink-0 rounded-full max-sm:size-11", logged && "border-primary/40 text-primary")}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  "block rounded-full",
-                  logged ? "size-3 bg-current" : "size-3 border border-muted-foreground/50",
-                )}
-              />
-            </SubmitButton>
-            <div className="min-w-0">
-              <p className={cn("truncate text-sm", logged && "text-muted-foreground line-through")}>
-                {supplement.name}
-              </p>
-              <p className="num text-xs text-muted-foreground">
-                {num(supplement.dose)} {supplement.unit}
-                {schedule.time ? ` · ${schedule.time}` : ""}
-              </p>
-            </div>
-          </ActionForm>
-        </li>
-      ))}
-    </ul>
+    <>
+      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+        Log supplements
+        <span className="num text-muted-foreground">
+          {count}/{items.length}
+        </span>
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Log supplements"
+        description={`Mark the doses you took on ${day}.`}
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={pending}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="button" onClick={save} disabled={pending} aria-busy={pending}>
+              {pending ? <Spinner className="size-3.5" /> : null}
+              Save doses
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-1">
+          {items.map((item) => {
+            const id = `supplement-${item.supplement.id}`;
+            return (
+              <FormField key={id} orientation="horizontal" className="min-h-11 rounded-lg px-1">
+                <Checkbox
+                  id={id}
+                  checked={takenOf(item)}
+                  onCheckedChange={(checked) =>
+                    setOverrides((current) => ({ ...current, [item.supplement.id]: checked === true }))
+                  }
+                />
+                <FieldLabel htmlFor={id} className="min-w-0 flex-1 gap-0.5">
+                  <span className="min-w-0 truncate text-sm">{item.supplement.name}</span>
+                  <span className="num block text-xs font-normal text-muted-foreground">
+                    {num(item.supplement.dose)} {item.supplement.unit}
+                    {item.schedule.time ? ` · ${item.schedule.time}` : ""}
+                  </span>
+                </FieldLabel>
+              </FormField>
+            );
+          })}
+          {error ? (
+            <p role="alert" className="px-1 text-xs text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </LogDialog>
+    </>
   );
 }
 

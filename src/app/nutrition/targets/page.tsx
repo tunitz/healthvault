@@ -61,13 +61,15 @@ export default async function NutritionTargetsPage(props: {
       </section>
 
       <section className="flex flex-col gap-2">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-sm font-medium">Edit targets</h2>
-          <p className="text-xs text-muted-foreground">
-            Saving creates manual targets effective from {day}. Open Targets to change the values.
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-sm font-medium">Edit targets</h2>
+            <p className="text-xs text-muted-foreground">
+              Saving creates manual targets effective from {day}.
+            </p>
+          </div>
+          <TargetsForm day={day} targets={targets} />
         </div>
-        <TargetsForm day={day} targets={targets} />
       </section>
     </div>
   );

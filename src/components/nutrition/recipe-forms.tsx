@@ -11,7 +11,7 @@ import {
   useTransition,
   type ComponentProps,
 } from "react";
-import { ArrowDown, ArrowUp, Eye, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   deleteRecipeAction,
@@ -21,9 +21,11 @@ import {
   searchRecipeFoodsAction,
 } from "@/app/actions";
 import { Field, SubmitButton } from "@/components/action-form";
+import { LogDialog } from "@/components/log-dialog";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type {
   RecipeDeleteState,
@@ -109,10 +111,10 @@ function FoodPicker({
   onSelect: (food: RecipeFoodOption) => void;
   onClear: () => void;
 }) {
-  const [open, setOpen] = useState(selected === null);
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RecipeFoodOption[]>([]);
-  const [searching, setSearching] = useState(selected === null);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -184,8 +186,25 @@ function FoodPicker({
     );
   }
 
+  if (!selected && !open) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        className="h-11 w-full justify-start font-normal text-muted-foreground"
+        onClick={() => {
+          setOpen(true);
+          setSearching(true);
+        }}
+      >
+        <Search aria-hidden />
+        Choose a saved food
+      </Button>
+    );
+  }
+
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="relative flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-1">
         <Input
           type="search"
@@ -227,7 +246,7 @@ function FoodPicker({
         ) : null}
       </div>
       {open ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
+        <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
           <p role="status" className="sr-only">
             {searching ? "Searching saved foods" : `${results.length} saved foods found`}
           </p>
@@ -283,6 +302,7 @@ function IngredientRow({
   total,
   selected,
   sharedDefaults,
+  compact = false,
   onChange,
   onMove,
   onRemove,
@@ -294,6 +314,7 @@ function IngredientRow({
   total: number;
   selected: RecipeFoodOption | null;
   sharedDefaults: Record<string, number>;
+  compact?: boolean;
   onChange: (patch: Partial<RecipeEditorIngredient>) => void;
   onMove: (delta: number) => void;
   onRemove: () => void;
@@ -351,38 +372,40 @@ function IngredientRow({
         </p>
       ) : null}
 
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_6rem] sm:items-end">
+      <div className={compact ? "grid gap-2 sm:items-end" : "grid gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_6rem] sm:items-end"}>
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-xs text-muted-foreground">Ingredient</span>
           <FoodPicker index={index} selected={selected} onSelect={onSelectFood} onClear={onClearFood} />
         </div>
-        <Field label="Quantity" hint="Whole batch">
-          <FoodInput
-            type="number"
-            inputMode="decimal"
-            min={row.unit === "g" ? "0.1" : "0.01"}
-            max="20000"
-            step="any"
-            value={row.quantity}
-            placeholder={row.unit === "g" ? "100" : "1"}
-            disabled={row.foodId === null}
-            onChange={(event) => onChange({ quantity: event.target.value })}
-          />
-        </Field>
-        <Field label="Unit">
-          <select
-            value={row.unit}
-            disabled={!selected}
-            onChange={(event) => onChange({ unit: event.target.value })}
-            className={SELECT}
-          >
-            {units.map((unit) => (
-              <option key={unit} value={unit}>
-                {unit}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className={compact ? "grid grid-cols-2 gap-2" : "contents"}>
+          <Field label="Quantity" hint="Whole batch">
+            <FoodInput
+              type="number"
+              inputMode="decimal"
+              min={row.unit === "g" ? "0.1" : "0.01"}
+              max="20000"
+              step="any"
+              value={row.quantity}
+              placeholder={row.unit === "g" ? "100" : "1"}
+              disabled={row.foodId === null}
+              onChange={(event) => onChange({ quantity: event.target.value })}
+            />
+          </Field>
+          <Field label="Unit">
+            <select
+              value={row.unit}
+              disabled={!selected}
+              onChange={(event) => onChange({ unit: event.target.value })}
+              className={SELECT}
+            >
+              {units.map((unit) => (
+                <option key={unit} value={unit}>
+                  {unit}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
       </div>
     </li>
   );
@@ -511,11 +534,17 @@ export function RecipeEditor({
   initialFoods,
   defaultMeasures,
   cancelHref,
+  onSuccess,
+  formId,
+  compact = false,
 }: {
   recipe?: RecipeEditorValues;
   initialFoods: RecipeFoodOption[];
   defaultMeasures: Record<string, number>;
   cancelHref: string;
+  onSuccess?: () => void;
+  formId?: string;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [state, formAction] = useActionState<RecipeFormState, FormData>(saveRecipeAction, {
@@ -632,8 +661,13 @@ export function RecipeEditor({
     toast.success(state.mode === "update" ? "Recipe updated" : "Recipe saved", {
       description: "Already-logged meals keep their own ingredient snapshots.",
     });
+    if (onSuccess) {
+      router.refresh();
+      onSuccess();
+      return;
+    }
     router.replace(`/nutrition/recipes/${state.recipeId}`);
-  }, [state, router]);
+  }, [state, router, onSuccess]);
 
   function updateRow(key: string, patch: Partial<RecipeEditorIngredient>) {
     setLocalError(null);
@@ -691,8 +725,9 @@ export function RecipeEditor({
 
   return (
     <form
+      id={formId}
       action={formAction}
-      className="flex flex-col gap-6"
+      className={compact ? "flex flex-col gap-4" : "flex flex-col gap-6"}
       onChange={() => {
         if (localError) setLocalError(null);
       }}
@@ -754,7 +789,7 @@ export function RecipeEditor({
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">Add at least one ingredient.</p>
         ) : (
-          <ol className="flex flex-col gap-3">
+          <ol className={compact ? "flex max-h-72 flex-col gap-2 overflow-y-auto pr-1" : "flex flex-col gap-3"}>
             {rows.map((row, index) => (
               <IngredientRow
                 key={row.key}
@@ -763,6 +798,7 @@ export function RecipeEditor({
                 total={rows.length}
                 selected={row.foodId === null ? null : foodCache[row.foodId] ?? null}
                 sharedDefaults={defaultMeasures}
+                compact={compact}
                 onChange={(patch) => updateRow(row.key, patch)}
                 onMove={(delta) => moveRow(index, delta)}
                 onRemove={() => {
@@ -811,24 +847,69 @@ export function RecipeEditor({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-end gap-2">
-        <Button asChild variant="ghost" size="sm">
-          <Link
-            href={cancelHref}
-            onClick={() => {
-              try {
-                window.sessionStorage.removeItem(DRAFT_KEY);
-              } catch {
-                // Best-effort cleanup; nothing sensitive is stored.
-              }
-            }}
-          >
-            Cancel
-          </Link>
-        </Button>
-        <SubmitButton size="sm" pendingLabel="Saving…">{recipe ? "Save changes" : "Save recipe"}</SubmitButton>
-      </div>
+      {formId ? null : (
+        <div className="flex items-center justify-end gap-2">
+          <Button asChild variant="ghost" size="sm">
+            <Link
+              href={cancelHref}
+              onClick={() => {
+                try {
+                  window.sessionStorage.removeItem(DRAFT_KEY);
+                } catch {
+                  // Best-effort cleanup; nothing sensitive is stored.
+                }
+              }}
+            >
+              Cancel
+            </Link>
+          </Button>
+          <SubmitButton size="sm" pendingLabel="Saving…">{recipe ? "Save changes" : "Save recipe"}</SubmitButton>
+        </div>
+      )}
     </form>
+  );
+}
+
+/** Recipes tab entry point: a compact editor in a dialog instead of a separate page. */
+export function NewRecipeDialog({
+  initialFoods,
+  defaultMeasures,
+}: {
+  initialFoods: RecipeFoodOption[];
+  defaultMeasures: Record<string, number>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button type="button" size="sm" onClick={() => setOpen(true)}>
+        <Plus aria-hidden />
+        New recipe
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="New recipe"
+        description="Name the recipe, add ingredients, and review the computed totals before saving."
+        size="lg"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="recipe-editor-form">Save recipe</Button>
+          </>
+        }
+      >
+        <RecipeEditor
+          compact
+          formId="recipe-editor-form"
+          cancelHref="/nutrition/recipes"
+          initialFoods={initialFoods}
+          defaultMeasures={defaultMeasures}
+          onSuccess={() => setOpen(false)}
+        />
+      </LogDialog>
+    </>
   );
 }
 
@@ -943,6 +1024,8 @@ export function RecipeLogForm({
   today,
   defaultMeal,
   timezone,
+  onSuccess,
+  formId,
 }: {
   recipeId: number;
   servingsTotal: number;
@@ -951,6 +1034,8 @@ export function RecipeLogForm({
   today: string;
   defaultMeal: (typeof MEALS)[number]["key"];
   timezone: string;
+  onSuccess?: () => void;
+  formId?: string;
 }) {
   const [state, formAction] = useActionState<RecipeLogState, FormData>(logRecipeAction, {
     ok: true,
@@ -981,7 +1066,8 @@ export function RecipeLogForm({
     toast.success("Recipe logged", {
       description: state.message,
     });
-  }, [state]);
+    onSuccess?.();
+  }, [state, onSuccess]);
 
   // Overrides belong to this log only: the recipe itself is never rewritten.
   const overridePayload = useMemo(() => {
@@ -1052,6 +1138,7 @@ export function RecipeLogForm({
 
   return (
     <form
+      id={formId}
       action={formAction}
       className="flex flex-col gap-4"
       onChange={() => {
@@ -1298,13 +1385,11 @@ export function RecipeLogForm({
           <Eye aria-hidden />
           {previewing ? "Calculating…" : "Preview"}
         </Button>
-        <SubmitButton
-          size="sm"
-          pendingLabel="Logging…"
-          disabled={initialServingNo === null}
-        >
-          Log serving
-        </SubmitButton>
+        {formId ? null : (
+          <SubmitButton size="sm" pendingLabel="Logging…" disabled={initialServingNo === null}>
+            Log serving
+          </SubmitButton>
+        )}
       </div>
 
       {localError ?? state.error ? (
@@ -1338,5 +1423,40 @@ export function RecipeLogForm({
         </p>
       ) : null}
     </form>
+  );
+}
+
+/** Opens the recipe logger in a dialog so the recipe page stays in place. */
+export function RecipeLogButton(
+  props: Omit<ComponentProps<typeof RecipeLogForm>, "onSuccess">,
+) {
+  const [open, setOpen] = useState(false);
+  const allLogged = props.initialServingNo === null;
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)} disabled={allLogged}>
+        <Plus aria-hidden />
+        {allLogged ? "All servings logged" : `Log serving ${props.initialServingNo}`}
+      </Button>
+      <LogDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Log serving"
+        description="One-time amounts apply only to this entry; the saved recipe is unchanged."
+        size="lg"
+        footer={
+          <>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" form="recipe-log-form" disabled={props.initialServingNo === null}>
+              Log serving
+            </Button>
+          </>
+        }
+      >
+        <RecipeLogForm {...props} formId="recipe-log-form" onSuccess={() => setOpen(false)} />
+      </LogDialog>
+    </>
   );
 }

@@ -67,7 +67,18 @@ function Section({
 }
 
 /** One food editor, used by both the daily New-food action and the Foods library. */
-export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHref: string }) {
+export function FoodForm({
+  food,
+  cancelHref,
+  onSuccess,
+  formId,
+}: {
+  food?: FoodFormValues;
+  cancelHref: string;
+  onSuccess?: () => void;
+  /** When set, the owning dialog renders the submit action in its sticky footer. */
+  formId?: string;
+}) {
   const router = useRouter();
   const [state, formAction] = useActionState<FoodFormState, FormData>(saveFoodAction, { ok: true });
 
@@ -107,8 +118,9 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
         return;
       }
       toast.success("Food saved");
+      onSuccess?.();
     }
-  }, [state, router]);
+  }, [state, router, onSuccess]);
 
   const sources = food && !SOURCES.includes(food.source as (typeof SOURCES)[number])
     ? [...SOURCES, food.source]
@@ -120,7 +132,7 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
   const basisChanged = food !== undefined && basis !== food.state;
 
   return (
-    <form action={formAction} className="flex flex-col gap-3">
+    <form id={formId} action={formAction} className="flex flex-col gap-3">
       {food ? (
         <>
           <input type="hidden" name="id" value={food.id} />
@@ -370,14 +382,16 @@ export function FoodForm({ food, cancelHref }: { food?: FoodFormValues; cancelHr
         </p>
       ) : null}
 
-      <div className="flex items-center justify-end gap-2">
-        {food ? (
-          <Button asChild variant="ghost" size="sm" className="min-h-11">
-            <Link href={cancelHref}>Cancel</Link>
-          </Button>
-        ) : null}
-        <SubmitButton size="sm" className="min-h-11">{food ? "Save changes" : "Save food"}</SubmitButton>
-      </div>
+      {formId ? null : (
+        <div className="flex items-center justify-end gap-2">
+          {food ? (
+            <Button asChild variant="ghost" size="sm" className="min-h-11">
+              <Link href={cancelHref}>Cancel</Link>
+            </Button>
+          ) : null}
+          <SubmitButton size="sm" className="min-h-11">{food ? "Save changes" : "Save food"}</SubmitButton>
+        </div>
+      )}
     </form>
   );
 }

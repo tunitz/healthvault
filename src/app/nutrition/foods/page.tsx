@@ -25,6 +25,7 @@ import { applyFoodTemplateAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { listFoodTemplates } from "@/lib/services/food-templates";
 import { DeleteFoodForm, FoodForm } from "@/components/nutrition/food-forms";
+import { NewFoodForm } from "@/components/nutrition/nutrition-forms";
 import { NutritionNav } from "@/components/nutrition/nutrition-nav";
 
 export const dynamic = "force-dynamic";
@@ -197,12 +198,15 @@ export default async function FoodsPage(props: {
           </CardContent>
         </Card>
       ) : (
-        <details className="rounded-xl border border-border" open={total === 0}>
-          <summary className="cursor-pointer px-4 py-3 text-sm font-medium">New food</summary>
-          <div className="border-t border-border p-4">
-            <FoodForm cancelHref={cancelHref} />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-sm font-medium">New food</h2>
+            <p className="text-xs text-muted-foreground">
+              Add a reusable food with its nutrition per 100 g.
+            </p>
           </div>
-        </details>
+          <NewFoodForm cancelHref={cancelHref} />
+        </div>
       )}
 
       {editMissing ? (

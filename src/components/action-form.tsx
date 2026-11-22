@@ -36,6 +36,7 @@ export function SubmitButton({
  */
 export function ActionForm({
   action,
+  id,
   className,
   children,
   resetOnSuccess = false,
@@ -45,6 +46,8 @@ export function ActionForm({
   onSuccess,
 }: {
   action: ActionFn;
+  /** Lets a dialog render its primary action in a sticky footer via `form="<id>"`. */
+  id?: string;
   className?: string;
   children: React.ReactNode;
   resetOnSuccess?: boolean;
@@ -75,6 +78,7 @@ export function ActionForm({
     <>
       <form
         ref={ref}
+        id={id}
         action={formAction}
         className={className}
         onSubmit={(event) => {

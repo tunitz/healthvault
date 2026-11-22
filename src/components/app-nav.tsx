@@ -48,6 +48,7 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
 import { applyAppearance, cacheAppearance } from "@/components/theme-provider";
 import { fetchSettings, saveSettings } from "@/components/dashboard/settings-api";
+import { requestQuickLog } from "@/lib/quick-log";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; Icon: LucideIcon; hint?: string };
@@ -109,10 +110,10 @@ const EXTRA_UTILITIES: NavItem[] = [
 ];
 
 const LOG_ACTIONS: NavItem[] = [
-  { href: "/nutrition", label: "Log food", hint: "Add a food or meal", Icon: Utensils },
-  { href: "/supplements", label: "Log supplement", hint: "Tick today's doses", Icon: Pill },
-  { href: "/measurements", label: "Log measurement", hint: "Weight, body fat, waist", Icon: Ruler },
-  { href: "/training/strength", label: "Log strength set", hint: "Record lifts & reps", Icon: Dumbbell },
+  { href: "/nutrition#log-food", label: "Log food", hint: "Add a food or meal", Icon: Utensils },
+  { href: "/supplements#log-supplements", label: "Log supplements", hint: "Tick today's doses", Icon: Pill },
+  { href: "/measurements#log-measurement", label: "Log measurement", hint: "Weight, body fat, waist", Icon: Ruler },
+  { href: "/training/strength#log-strength", label: "Log strength set", hint: "Record lifts & reps", Icon: Dumbbell },
   { href: "/uploads", label: "Import health data", hint: "Manual Apple Health export", Icon: Upload },
 ];
 
@@ -195,6 +196,9 @@ function SheetLink({ item, active }: { item: NavItem; active: boolean }) {
       <Link
         href={href}
         aria-current={active ? "page" : undefined}
+        onClick={() => {
+          if (href.includes("#log-")) requestQuickLog(href.slice(href.indexOf("#")));
+        }}
         className={cn(
           "flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2.5 text-sm hover:bg-accent",
           active
@@ -352,13 +356,13 @@ export function AppNav({ children }: { children: ReactNode }) {
   return (
     <>
       <header className="sticky top-0 z-40 border-b bg-background/80 pt-[env(safe-area-inset-top)] backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="flex h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
+        <div className="flex h-14 items-center gap-2 px-3 sm:gap-3 sm:px-6 lg:px-8">
           <Link
             href="/"
             className="flex shrink-0 items-center gap-2 rounded-md text-sm font-semibold tracking-tight text-foreground"
           >
             <Logo size={24} />
-            <span>HealthVault</span>
+            <span className="hidden min-[360px]:inline">HealthVault</span>
           </Link>
 
           <div className="ms-auto flex items-center gap-1">

@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { ActionForm, Field, SubmitButton } from "@/components/action-form";
 import { PaceGoalChart } from "@/components/training-charts";
+import { SessionUpdate } from "@/components/training/session-update";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { setSessionStatusAction, startTrainingBlockAction } from "@/app/actions";
+import { startTrainingBlockAction } from "@/app/actions";
 import type { FiveKAttempt } from "@/db/queries";
 import { dayLabel } from "@/lib/day";
 import { formatSeconds, plural, workoutLabel } from "@/lib/format";
@@ -15,9 +16,6 @@ import {
   type PlannedSession,
 } from "@/lib/services/training-plan";
 import { formatDistance, formatPaceClock, toDisplayPace, type Units } from "@/lib/units";
-
-const SELECT =
-  "h-8 max-sm:h-11 min-w-0 max-w-full rounded-lg border border-input bg-transparent px-2 py-1 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 export type WorkoutOption = {
   id: number;
@@ -162,7 +160,6 @@ function SessionRow({
 }) {
   const target = sessionTarget(session);
   const linked = session.workoutId === null ? undefined : options.find((option) => option.id === session.workoutId);
-  const selectId = `workout-${session.id}`;
 
   return (
     <li className="flex flex-col gap-2 border-t border-border/60 py-3 first:border-t-0 first:pt-0">
@@ -188,96 +185,12 @@ function SessionRow({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
-        {session.status !== "done" ? (
-          <ActionForm
-            action={setSessionStatusAction}
-            className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
-          >
-            <input type="hidden" name="id" value={session.id} />
-            <input type="hidden" name="status" value="done" />
-            {options.length > 0 ? (
-              <select
-                name="workoutId"
-                aria-label={`Imported workout for ${session.title} on ${session.day}`}
-                defaultValue=""
-                className={SELECT}
-              >
-                <option value="">No workout link</option>
-                {options.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {workoutLabel(option.type)}
-                    {option.km === null ? "" : ` · ${formatDistance(option.km, units, 2)}`}
-                    {option.minutes === null ? "" : ` · ${Math.round(option.minutes)} min`}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <SubmitButton
-              size="xs"
-              variant="outline"
-              aria-label={`Mark ${session.title} on ${session.day} done`}
-            >
-              Done
-            </SubmitButton>
-          </ActionForm>
-        ) : null}
-
-        {session.status === "planned" ? (
-          <ActionForm action={setSessionStatusAction} className="flex items-center">
-            <input type="hidden" name="id" value={session.id} />
-            <input type="hidden" name="status" value="skipped" />
-            <SubmitButton
-              size="xs"
-              variant="ghost"
-              aria-label={`Skip ${session.title} on ${session.day}`}
-            >
-              Skip
-            </SubmitButton>
-          </ActionForm>
-        ) : null}
-
-        {session.status !== "planned" ? (
-          <ActionForm action={setSessionStatusAction} className="flex items-center">
-            <input type="hidden" name="id" value={session.id} />
-            <input type="hidden" name="status" value="planned" />
-            <SubmitButton
-              size="xs"
-              variant="ghost"
-              aria-label={`Undo ${session.status} for ${session.title} on ${session.day}`}
-            >
-              Undo
-            </SubmitButton>
-          </ActionForm>
-        ) : null}
-
-        {session.status === "done" && options.length > 0 ? (
-          <ActionForm
-            action={setSessionStatusAction}
-            className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
-          >
-            <input type="hidden" name="id" value={session.id} />
-            <input type="hidden" name="status" value="done" />
-            <select
-              id={selectId}
-              name="workoutId"
-              aria-label={`Change the imported workout for ${session.title} on ${session.day}`}
-              defaultValue={linked?.id ?? ""}
-              className={SELECT}
-            >
-              <option value="">No workout link</option>
-              {options.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {workoutLabel(option.type)}
-                  {option.km === null ? "" : ` · ${formatDistance(option.km, units, 2)}`}
-                  {option.minutes === null ? "" : ` · ${Math.round(option.minutes)} min`}
-                </option>
-              ))}
-            </select>
-            <SubmitButton size="xs" variant="outline">Save link</SubmitButton>
-          </ActionForm>
-        ) : null}
-      </div>
+      <SessionUpdate
+        session={session}
+        options={options}
+        units={units}
+        dayLabel={dayLabel(session.day)}
+      />
     </li>
   );
 }
