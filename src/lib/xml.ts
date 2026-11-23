@@ -1,3 +1,11 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// >>> rust-anything: xml-rs is on. `rust-anything disable ../../rust/xml-rs` removes this block.
+// @ts-ignore
+const __rustAnything_xml_rs = ((p) => p && p.env.RUST_ANYTHING_MODE !== 'old' && p.env.RUST_ANYTHING_UNIT_XML !== 'original' && (() => { try { const m = p.getBuiltinModule('node:module'); const at = p.getBuiltinModule('node:path').join(import.meta.dirname, "../../rust/xml-rs/index.cjs"); return m.createRequire(at)(at) } catch (e) { if (p.env.RUST_ANYTHING_MODE === 'new') throw e } })())(globalThis.process)
+// @ts-ignore
+if (__rustAnything_xml_rs) { parseHealthXml = __rustAnything_xml_rs.parseHealthXml }
+// <<< rust-anything: xml-rs
+/* eslint-enable @typescript-eslint/ban-ts-comment */
 import sax from "sax";
 
 export type HealthRecordRow = {
