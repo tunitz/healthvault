@@ -1,12 +1,126 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Unzip, UnzipInflate } from "fflate";
 import { eq } from "drizzle-orm";
 import { db, sqlite } from "@/db";
 import { invalidateRecordCaches, WORKOUT_DEDUP } from "@/db/queries";
 import { uploads } from "@/db/schema";
-import { createHealthParser, type HealthRecordRow, type SummaryRow, type WorkoutRow } from "@/lib/xml";
+import {
+  createHealthParser,
+  type HealthRecordRow,
+  type MeCharacteristics,
+  type SummaryRow,
+  type WorkoutRow,
+} from "@/lib/xml";
 import { parseGpxRoute, type ParsedGpxRoute } from "@/lib/gpx";
 import { parseEcgCsv, type ParsedEcg } from "@/lib/ecg";
 import { prefillProfile } from "@/lib/services/profile";
+
+type NativeIngestResult = {
+  seen: number;
+  inserted: number;
+  routesInserted: number;
+  ecgsInserted: number;
+  me: MeCharacteristics;
+};
+
+let cachedNativeBinary: string | null | undefined;
+
+function resolveNativeIngestBinary(): string | null {
+  if (process.env.RUST_ANYTHING_MODE === "old" || process.env.RUST_ANYTHING_UNIT_INGEST === "original") {
+    return null;
+  }
+  if (cachedNativeBinary !== undefined) {
+    if (!cachedNativeBinary && process.env.RUST_ANYTHING_MODE === "new") {
+      throw new Error("rust/ingest-rs binary (healthvault-ingest) is unavailable");
+    }
+    return cachedNativeBinary;
+  }
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(process.cwd(), "rust", "ingest-rs", "healthvault-ingest"),
+    join(process.cwd(), "rust", "ingest-rs", "target", "release", "healthvault-ingest"),
+    join(dir, "..", "..", "rust", "ingest-rs", "healthvault-ingest"),
+    join(dir, "..", "..", "rust", "ingest-rs", "target", "release", "healthvault-ingest"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(/* turbopackIgnore: true */ candidate)) {
+      cachedNativeBinary = candidate;
+      return candidate;
+    }
+  }
+  cachedNativeBinary = null;
+  if (process.env.RUST_ANYTHING_MODE === "new") {
+    throw new Error("rust/ingest-rs binary (healthvault-ingest) was not found");
+  }
+  return null;
+}
+
+/**
+ * Run the Rust ingest worker in a dedicated child process.
+ *
+ * Isolating SQLite writes in a separate OS process avoids Linux POSIX fcntl() lock-release
+ * hazards between two independent libsqlite3 copies (better-sqlite3 vs rusqlite) in one PID,
+ * keeps the JS event loop completely unblocked, and streams zip -> XML/GPX/ECG -> SQLite WAL
+ * with zero per-row JS allocation.
+ */
+function runRustIngestWorker(
+  binaryPath: string,
+  zipBytes: Uint8Array,
+  dbPath: string,
+  uploadId: number,
+  chunkSize: number,
+  maxXmlBytes: number,
+  progressInterval: number,
+): Promise<NativeIngestResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      binaryPath,
+      [
+        dbPath,
+        String(uploadId),
+        String(chunkSize),
+        String(maxXmlBytes),
+        String(progressInterval),
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    let settled = false;
+    const finish = (err: Error | null, res?: NativeIngestResult) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve(res!);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => outChunks.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => errChunks.push(chunk));
+    child.stdin.on("error", () => {
+      // Ignore EPIPE when the worker rejects early (e.g. invalid zip) before reading all of stdin.
+    });
+    child.on("error", (err) => finish(err));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const msg = Buffer.concat(errChunks).toString("utf8").trim() || `healthvault-ingest exited with code ${code}`;
+        finish(new Error(msg));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(Buffer.concat(outChunks).toString("utf8").trim()) as NativeIngestResult;
+        finish(null, parsed);
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+
+    child.stdin.end(Buffer.from(zipBytes.buffer, zipBytes.byteOffset, zipBytes.byteLength));
+  });
+}
 
 export type IngestResult = {
   uploadId: number;
@@ -233,46 +347,69 @@ export async function runIngest(zipBytes: Uint8Array, filename: string, bytes: n
     .returning({ id: uploads.id });
 
   try {
-    const parser = createHealthParser();
-    const decoder = new TextDecoder();
-    const side: SideCollectors = { routes: [], ecgs: [] };
     let inserted = 0;
     let seen = 0;
-    let lastReported = 0;
+    let routesInserted = 0;
+    let ecgsInserted = 0;
+    let me: MeCharacteristics = {};
 
-    const flush = () => {
-      const parsed = parser.drain();
-      seen += parsed.records.length + parsed.workouts.length + parsed.summaries.length;
-      inserted += writeBatch(parsed.records, parsed.workouts, parsed.summaries);
-      if (seen - lastReported >= PROGRESS_INTERVAL) {
-        lastReported = seen;
-        updateProgressStmt.run(seen, handle.id);
-      }
-    };
+    const nativeBin = resolveNativeIngestBinary();
+    const dbPath = sqlite.name;
+    if (nativeBin && dbPath && dbPath !== ":memory:") {
+      const nativeRes = await runRustIngestWorker(
+        nativeBin,
+        zipBytes,
+        dbPath,
+        handle.id,
+        CHUNK,
+        MAX_XML_BYTES,
+        PROGRESS_INTERVAL,
+      );
+      seen = nativeRes.seen;
+      inserted = nativeRes.inserted;
+      routesInserted = nativeRes.routesInserted;
+      ecgsInserted = nativeRes.ecgsInserted;
+      me = nativeRes.me ?? {};
+    } else {
+      const parser = createHealthParser();
+      const decoder = new TextDecoder();
+      const side: SideCollectors = { routes: [], ecgs: [] };
+      let lastReported = 0;
 
-    let sawXml = false;
-    const SUB_CHUNK_CHARS = 128 * 1024;
-    for await (const chunk of exportXmlChunks(zipBytes, side)) {
-      sawXml = true;
-      const decoded = decoder.decode(chunk, { stream: true });
-      for (let off = 0; off < decoded.length; off += SUB_CHUNK_CHARS) {
-        parser.write(decoded.slice(off, off + SUB_CHUNK_CHARS));
-        if (parser.pending() >= CHUNK) flush();
+      const flush = () => {
+        const parsed = parser.drain();
+        seen += parsed.records.length + parsed.workouts.length + parsed.summaries.length;
+        inserted += writeBatch(parsed.records, parsed.workouts, parsed.summaries);
+        if (seen - lastReported >= PROGRESS_INTERVAL) {
+          lastReported = seen;
+          updateProgressStmt.run(seen, handle.id);
+        }
+      };
+
+      let sawXml = false;
+      const SUB_CHUNK_CHARS = 128 * 1024;
+      for await (const chunk of exportXmlChunks(zipBytes, side)) {
+        sawXml = true;
+        const decoded = decoder.decode(chunk, { stream: true });
+        for (let off = 0; off < decoded.length; off += SUB_CHUNK_CHARS) {
+          parser.write(decoded.slice(off, off + SUB_CHUNK_CHARS));
+          if (parser.pending() >= CHUNK) flush();
+        }
       }
+      if (!sawXml) throw new Error("export.xml not found in zip");
+      parser.write(decoder.decode());
+      parser.end();
+      flush();
+
+      ({ routesInserted, ecgsInserted } = writeSideFiles(side.routes, side.ecgs));
+      me = parser.characteristics();
     }
-    if (!sawXml) throw new Error("export.xml not found in zip");
-    parser.write(decoder.decode());
-    parser.end();
-    flush();
-
-    const { routesInserted, ecgsInserted } = writeSideFiles(side.routes, side.ecgs);
     invalidateRecordCaches();
 
     // <Me> carries birth date and biological sex; height arrives as a quantity record.
     // A prefill failure must not mark a fully imported file as failed.
     let warning: string | null = null;
     try {
-      const me = parser.characteristics();
       const height = sqlite
         .prepare(
           `SELECT value, unit FROM records WHERE type_identifier = 'HKQuantityTypeIdentifierHeight'

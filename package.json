@@ -10,6 +10,7 @@
     "test": "bun test --isolate",
     "test:src": "bun test --isolate src/",
     "typecheck": "next typegen && tsc --noEmit",
+    "rust:build": "rust-anything build rust/xml-rs && cargo build --release --manifest-path rust/ingest-rs/Cargo.toml && cp rust/ingest-rs/target/release/healthvault-ingest rust/ingest-rs/healthvault-ingest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun scripts/migrate-db.ts",
     "db:backup": "bun scripts/backup-db.ts",
