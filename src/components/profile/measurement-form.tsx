@@ -36,7 +36,7 @@ export function MeasurementForm({
   const preferredUnit =
     kind === "weight" ? weightUnit(units) : kind === "waist" ? waistUnit(units) : meta.unit?.[0];
   const placeholder =
-    kind === "weight" ? (units === "imperial" ? "176" : "80") : kind === "bodyFat" ? "20" : units === "imperial" ? "35" : "90";
+    kind === "weight" ? (units === "imperial" ? "176.25" : "80.25") : kind === "bodyFat" ? "20" : units === "imperial" ? "35" : "90";
 
   return (
     <ActionForm id="measurement-form" action={addMeasurementAction} resetOnSuccess onSuccess={onSuccess} className="grid gap-3 sm:grid-cols-2">
@@ -50,7 +50,7 @@ export function MeasurementForm({
 
       <div className="grid grid-cols-[1fr_auto] items-end gap-2">
         <Field label={meta.value}>
-          <Input name="value" type="number" inputMode="decimal" step="0.1" min="0" required placeholder={placeholder} />
+          <Input name="value" type="text" inputMode="decimal" pattern="[0-9]+([.,][0-9]+)?" required placeholder={placeholder} />
         </Field>
         {meta.unit ? (
           <Field label="Unit">

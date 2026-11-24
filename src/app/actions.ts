@@ -204,7 +204,8 @@ export async function addMeasurementAction(_prev: ActionState, fd: FormData): Pr
       : undefined;
     addMeasurement({
       kind: text(fd, "kind") ?? "weight",
-      value: text(fd, "value"),
+      // The decimal keyboard can supply a comma depending on the device locale.
+      value: text(fd, "value")?.replace(",", "."),
       unit: text(fd, "unit") ?? undefined,
       ...(isDay(day) ? { day } : {}),
       ...(takenAt === undefined ? {} : { takenAt }),
