@@ -4,6 +4,7 @@ import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { compact, num } from "@/lib/format";
+import { formatDisplayWeight, type Units } from "@/lib/units";
 
 export type SeriesPoint = { day: string; value: number };
 
@@ -17,6 +18,7 @@ export function SeriesChart({
   colorVar = "var(--chart-1)",
   ariaLabel,
   xTickFormatter,
+  weightUnits,
 }: {
   data: SeriesPoint[];
   kind: "line" | "area" | "bars";
@@ -25,6 +27,7 @@ export function SeriesChart({
   colorVar?: string;
   ariaLabel: string;
   xTickFormatter?: (value: string) => string;
+  weightUnits?: Units;
 }) {
   const gradientId = `series-fill-${useId().replace(/:/g, "")}`;
   const config = { value: { label, color: colorVar } } satisfies ChartConfig;
@@ -53,7 +56,12 @@ export function SeriesChart({
         tickFormatter={(value: number) => compact(value)}
       />
       <ChartTooltip
-        content={<ChartTooltipContent formatter={(value) => [`${num(Number(value))}${unit ? ` ${unit}` : ""}`, label]} />}
+        content={
+          <ChartTooltipContent formatter={(value) => [
+            weightUnits ? formatDisplayWeight(Number(value), weightUnits) : `${num(Number(value))}${unit ? ` ${unit}` : ""}`,
+            label,
+          ]} />
+        }
       />
     </>
   );

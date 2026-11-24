@@ -13,10 +13,10 @@ import {
 import { formatLocal } from "@/lib/day";
 import { num } from "@/lib/format";
 import {
+  formatDisplayWeight,
   formatWeight,
   formatWeightDelta,
   toDisplayWeight,
-  weightUnit,
   type Units,
 } from "@/lib/units";
 import type { Point } from "@/lib/services/measurements";
@@ -118,7 +118,7 @@ export function WeightChart({
               {...tip}
               labelFormatter={(value) => formatLocal(Number(value), timezone)}
               formatter={(value, name) => [
-                `${num(Number(value), 1)} ${weightUnit(units)}`,
+                formatDisplayWeight(Number(value), units),
                 name === "manual" ? "manual" : "Apple",
               ]}
             />

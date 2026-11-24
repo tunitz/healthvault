@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { HealthContext } from "@/lib/services/context";
 import type { Units } from "@/lib/units";
-import { formatDistance, formatPace, formatWeight, formatWeightDelta, resolveUnits } from "@/lib/units";
+import { formatDistance, formatPace, formatWeight, formatWeightDelta, resolveUnits, toDisplayWeight, weightUnit } from "@/lib/units";
 import { compact, instant, num, plural, workoutLabel } from "@/lib/format";
 import { dayHeading } from "@/lib/day";
 import { SleepStackChart } from "@/components/sleep-stack-chart";
@@ -214,10 +214,10 @@ function measurementsView(data: DashboardData, range: RangeData, units: Units, d
   if (display === "line" || display === "area") {
     return (
       <SeriesChart
-        data={range.measurements.map((point) => ({ day: point.day, value: Number(point.value.toFixed(2)) }))}
+        data={range.measurements.map((point) => ({ day: point.day, value: toDisplayWeight(point.value, units) }))}
         kind={display}
-        label="Weight (kg)"
-        unit="kg"
+        label={`Weight (${weightUnit(units)})`}
+        weightUnits={units}
         colorVar="var(--chart-2)"
         ariaLabel={`Weight measurements over ${range.days} days`}
       />
@@ -295,10 +295,10 @@ function weightView(context: HealthContext, range: RangeData, units: Units, disp
   if (display === "line" || display === "area") {
     return (
       <SeriesChart
-        data={range.weight.points.map((point) => ({ day: point.day, value: Number(point.value.toFixed(2)) }))}
+        data={range.weight.points.map((point) => ({ day: point.day, value: toDisplayWeight(point.value, units) }))}
         kind={display}
-        label="Weight (kg)"
-        unit="kg"
+        label={`Weight (${weightUnit(units)})`}
+        weightUnits={units}
         colorVar="var(--chart-3)"
         ariaLabel={`Weight trend over ${range.days} days`}
       />

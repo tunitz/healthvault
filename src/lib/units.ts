@@ -28,6 +28,12 @@ export function resolveUnits(value: unknown): Units {
 
 /* Weight ------------------------------------------------------------------- */
 
+const weightNumber = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  roundingMode: "trunc",
+});
+const supportsWeightTruncation = weightNumber.resolvedOptions().roundingMode === "trunc";
+
 export function weightUnit(units: Units): "kg" | "lb" {
   return units === "imperial" ? "lb" : "kg";
 }
@@ -40,13 +46,22 @@ export function toCanonicalWeight(value: number, units: Units): number {
   return units === "imperial" ? value * KG_PER_LB : value;
 }
 
+/** Format a weight already converted to the display unit, without rounding its hundredths. */
+export function formatDisplayWeight(value: number, units: Units): string {
+  // Discard floating-point conversion noise so a stored 176.02 lb still displays as 176.02 lb.
+  const display = units === "imperial" ? Number(value.toPrecision(15)) : value;
+  const weight = supportsWeightTruncation
+    ? display
+    : Number(String(display).replace(/(\.\d{2})\d+$/, "$1"));
+  return `${weightNumber.format(weight)} ${weightUnit(units)}`;
+}
+
 export function formatWeight(
   kg: number | null | undefined,
   units: Units,
-  digits = 1,
 ): string {
   if (kg === null || kg === undefined || Number.isNaN(kg)) return "—";
-  return `${num(toDisplayWeight(kg, units), digits)} ${weightUnit(units)}`;
+  return formatDisplayWeight(toDisplayWeight(kg, units), units);
 }
 
 /** Signed delta with the unit, e.g. "+1.2 kg" or "−2.6 lb". */
