@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   serverExternalPackages: ["better-sqlite3"],
   experimental: {
     // Proxy (src/proxy.ts) runs on every request, so Next buffers each request body to let the

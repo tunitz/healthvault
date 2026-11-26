@@ -1,9 +1,8 @@
 services:
   healthvault:
-    build: .
-    image: healthvault:latest
+    image: ghcr.io/tunitz/healthvault:${IMAGE_TAG:-latest}
     container_name: healthvault
-    restart: always
+    restart: unless-stopped
     # Must match the host user that owns ./data (`id -u` / `id -g`).
     user: "1000:1000"
     ports:
@@ -14,8 +13,8 @@ services:
       # .env is git-ignored; copy .env.example and fill in the auth variables.
       - .env
     environment:
-      - NODE_ENV=production
-      - DATABASE_PATH=/data/health.db
+      NODE_ENV: production
+      DATABASE_PATH: /data/health.db
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3040/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
