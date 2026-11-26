@@ -1,0 +1,54 @@
+name: Bug Report
+description: Report a reproducible bug in HealthVault
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Clear, concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to reproduce (do not attach personal Apple Health exports).
+      placeholder: |
+        1. Navigate to ...
+        2. Submit ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected vs Actual Behavior
+      description: What you expected to happen and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment Method
+      options:
+        - Docker (GHCR / Compose)
+        - Prebuilt Release Archive
+        - Source Checkout (Bun)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit & Environment
+      description: HealthVault release tag or commit SHA, Bun/Node version, OS, and browser.
+      placeholder: "v0.1.0, Bun 1.4.x, Linux"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste sanitized server or browser console logs (remove tokens, hashes, and personal health data).
+      render: text

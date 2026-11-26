@@ -1,17 +1,17 @@
 # HealthVault production deployment
 
-> Host-specific doc: this describes the maintainer's long-running systemd host. For the generic,
-> host-agnostic production setup (fresh machine, bun only), see the Installation section in the
-> main `README.md`.
+> Host-specific guide for running HealthVault under systemd on Linux. For the recommended Docker
+> Compose setup or quick local start, see the [main README](../README.md).
 
-Production uses the normal Next.js server output. `bun run build` (`next build`)
-writes `.next/`; the service runs `next start` from this directory. There is no
-standalone or single-binary build, and no Bun native compilation.
+HealthVault builds as a Next.js standalone application (`output: "standalone"` in `next.config.ts`).
+Docker images and GitHub Release archives run the standalone server on Node 22; bare-metal systemd
+deployments can run either the standalone bundle (`node .next/standalone/server.js`) or `bun run start`
+(`next start`) from the repository checkout (`<INSTALL_DIR>`).
 
 ## Build
 
 ```bash
-cd /home/tunitz/Projects/healthvault
+cd <INSTALL_DIR>
 systemctl --user stop healthvault
 bun run build
 systemctl --user start healthvault
@@ -31,28 +31,29 @@ DATABASE_PATH=/tmp/healthvault-build/health.db bun run build
 
 ## Runtime
 
-- `WorkingDirectory=/home/tunitz/Projects/healthvault`
+- `WorkingDirectory=<INSTALL_DIR>` (e.g. `%h/healthvault`)
 - `.next/`, `node_modules/`, `public/`, `drizzle/`, `next.config.ts`, `package.json`
-  are all required at runtime.
-- `DATABASE_PATH=/home/tunitz/Projects/healthvault/data/health.db` (git-ignored)
+  are all required at runtime when running `next start`.
+- `DATABASE_PATH=<INSTALL_DIR>/data/health.db` (git-ignored)
 - `NODE_ENV=production`, `NEXT_TELEMETRY_DISABLED=1`, `PORT=3040`, `HOSTNAME=0.0.0.0`
 - On bare-metal systemd hosts, Bun runs the Next server (`bun --bun ... next start`);
-  in Docker (`Dockerfile`), the build uses Bun while the runtime image executes `next start`
-  on Node 22.
+  in Docker (`Dockerfile`), the build uses Bun while the runtime image executes the standalone
+  server on Node 22.
 - Migrations run from `drizzle/` at boot.
 
 ## Service unit
 
 The tracked definitions are `deploy/systemd/healthvault.service`,
-`deploy/systemd/healthvault-backup.service` and `deploy/systemd/healthvault-backup.timer`. Install
-them as user units and reload systemd:
+`deploy/systemd/healthvault-backup.service` and `deploy/systemd/healthvault-backup.timer`. They
+assume a checkout at `%h/healthvault`; edit the paths if you install elsewhere, then symlink them
+as user units and reload systemd:
 
 ```bash
-ln -sfn /home/tunitz/Projects/healthvault/deploy/systemd/healthvault.service \
+ln -sfn <INSTALL_DIR>/deploy/systemd/healthvault.service \
   ~/.config/systemd/user/healthvault.service
-ln -sfn /home/tunitz/Projects/healthvault/deploy/systemd/healthvault-backup.service \
+ln -sfn <INSTALL_DIR>/deploy/systemd/healthvault-backup.service \
   ~/.config/systemd/user/healthvault-backup.service
-ln -sfn /home/tunitz/Projects/healthvault/deploy/systemd/healthvault-backup.timer \
+ln -sfn <INSTALL_DIR>/deploy/systemd/healthvault-backup.timer \
   ~/.config/systemd/user/healthvault-backup.timer
 systemctl --user daemon-reload
 systemctl --user restart healthvault
@@ -69,11 +70,11 @@ the SQLite `auth_credentials` row takes precedence over `.env` / `auth.env`.
 `bun run db:backup` daily at 03:30 (persistent catch-up) and prunes backups older than 14 days.
 
 Credentials are managed either in the web UI (`/setup`, `/settings/account`, `/settings/mcp`) or
-with the repo script — on this host it targets `~/.config/healthvault/auth.env` automatically
-because that file exists (the target is always printed; `--file` overrides):
+with the repo script — if `~/.config/healthvault/auth.env` exists, `password:set` targets it
+automatically (the target is always printed; `--file` overrides):
 
 ```bash
-cd /home/tunitz/Projects/healthvault
+cd <INSTALL_DIR>
 bun run password:set && systemctl --user restart healthvault
 ```
 
@@ -92,7 +93,7 @@ Use the online backup script (integrity-checked, WAL-safe, mode 600) or download
 backup directly from **Settings → Data tools** (`/settings/data-tools`, `GET /api/backup`):
 
 ```bash
-cd /home/tunitz/Projects/healthvault
+cd <INSTALL_DIR>
 bun run db:backup                      # data/backups/health-<timestamp>.db
 ```
 

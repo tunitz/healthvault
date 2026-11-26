@@ -2,6 +2,27 @@
   "name": "healthvault",
   "version": "0.1.0",
   "private": true,
+  "description": "Self-hosted personal health, nutrition, training, and Apple Health analytics dashboard with an MCP server.",
+  "license": "MIT",
+  "author": "tunitz",
+  "homepage": "https://github.com/tunitz/healthvault#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tunitz/healthvault.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tunitz/healthvault/issues"
+  },
+  "keywords": [
+    "apple-health",
+    "health",
+    "nutrition",
+    "fitness",
+    "nextjs",
+    "sqlite",
+    "mcp",
+    "self-hosted"
+  ],
   "scripts": {
     "dev": "bun --bun next dev",
     "build": "bun --bun next build",
