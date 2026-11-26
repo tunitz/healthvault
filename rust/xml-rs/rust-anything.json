@@ -1,0 +1,61 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": ".",
+  "unit": "src/lib/xml.ts",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "xml-rs",
+  "exports": [
+    {
+      "name": "parseHealthXml",
+      "file": "src/lib/xml.ts",
+      "line": 285,
+      "params": [
+        {
+          "name": "xml",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "{\n  records: {\n  typeIdentifier: string; unit: string; value: number;\n  startDate: string; startMs: number; day: string;\n  endDate: string; endMs: number; sourceName: string;\n}[];\n  workouts: {\n  workoutActivityType: string; startDate: string; startMs: number; day: string;\n  endDate: string; endMs: number; durationSeconds?: number;\n  totalDistance?: number; totalDistanceUnit?: string;\n  totalEnergyBurned?: number; totalEnergyBurnedUnit?: string;\n  avgHr?: number; minHr?: number; maxHr?: number;\n  sourceName?: string; metadataJson?: string;\n}[];\n  summaries: {\n  dateComponents: string; day: string;\n  activeEnergyBurned?: number; activeEnergyBurnedGoal?: number;\n  appleMoveMinutes?: number; appleMoveMinutesGoal?: number;\n  appleExerciseTime?: number; appleExerciseTimeGoal?: number;\n  appleStandHours?: number; appleStandHoursGoal?: number;\n}[];\n  me: {\n  dateOfBirth?: string;\n  biologicalSex?: string;\n};\n}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "msOf",
+      "file": "src/lib/xml.ts",
+      "line": 42,
+      "reason": "30ns leaf helper faster in JS than crossing FFI"
+    },
+    {
+      "name": "toKm",
+      "file": "src/lib/xml.ts",
+      "line": 106,
+      "reason": "30ns leaf helper faster in JS than crossing FFI"
+    },
+    {
+      "name": "toKcal",
+      "file": "src/lib/xml.ts",
+      "line": 116,
+      "reason": "30ns leaf helper faster in JS than crossing FFI"
+    },
+    {
+      "name": "toSeconds",
+      "file": "src/lib/xml.ts",
+      "line": 127,
+      "reason": "30ns leaf helper faster in JS than crossing FFI"
+    },
+    {
+      "name": "createHealthParser",
+      "file": "src/lib/xml.ts",
+      "line": 140,
+      "reason": "streaming callback object; runIngest uses rust/ingest-rs directly"
+    }
+  ]
+}

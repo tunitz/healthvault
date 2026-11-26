@@ -1,0 +1,1 @@
+ALTER TABLE `auth_credentials` ADD `agent_token` text;

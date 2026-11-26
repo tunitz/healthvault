@@ -1,0 +1,24 @@
+# HealthVault TLS reverse proxy example.
+#
+# Plain HTTP on the LAN exposes the login password in transit;
+# put Caddy (or any TLS terminator) in front for anything beyond a fully trusted
+# network. With TLS in front, set HEALTHVAULT_COOKIE_SECURE=1 in
+# ~/.config/healthvault/auth.env so the session cookie is Secure-only.
+# Add the exact site hostname here to HEALTHVAULT_ALLOWED_HOSTS in auth.env.
+#
+# Usage:
+#   caddy run --config /path/to/Caddyfile
+# (or install as a system service; see https://caddyserver.com/docs)
+
+healthvault.example.com {
+	reverse_proxy 127.0.0.1:3040 {
+		# Pass the client protocol so the app can set Secure cookies correctly.
+		header_up X-Forwarded-Proto {scheme}
+	}
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/healthvault.log
+		# Access logs contain URLs only; no request bodies are logged.
+	}
+}

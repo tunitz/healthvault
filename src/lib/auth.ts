@@ -1,0 +1,288 @@
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import type { PasswordHash } from "@/lib/auth-config";
+import {
+  PASSWORD_HASH_KEY_BYTES,
+  PASSWORD_HASH_PARAMS,
+  PASSWORD_HASH_SALT_BYTES,
+  getActiveAuthConfig,
+  parsePasswordHash,
+} from "@/lib/auth-config";
+
+export const SESSION_COOKIE = "hv_session";
+
+/** scrypt needs headroom for N/r/p; 256 MB comfortably covers the documented N=16384,r=8,p=1. */
+const SCRYPT_MAXMEM = 256 * 1024 * 1024;
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const MAX_LOGIN_FAILURES = 5;
+
+/** Thrown when a server action or route runs without a valid session. */
+export class AuthenticationError extends Error {
+  constructor(message = "Not signed in — sign in again") {
+    super(message);
+    this.name = "AuthenticationError";
+  }
+}
+
+function matchesPasswordHash(password: string, passwordHash: PasswordHash): boolean {
+  const derived = scryptSync(password, passwordHash.salt, passwordHash.hash.length, {
+    N: passwordHash.N,
+    r: passwordHash.r,
+    p: passwordHash.p,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return derived.length === passwordHash.hash.length && timingSafeEqual(derived, passwordHash.hash);
+}
+
+export function verifyPassword(password: string): boolean {
+  try {
+    return matchesPasswordHash(password, getActiveAuthConfig().passwordHash);
+  } catch {
+    // A corrupt/malformed stored hash (or a missing config) simply cannot authenticate. Never let
+    // it throw through a login or password-change handler.
+    return false;
+  }
+}
+
+/**
+ * Hash a new password with the canonical scrypt parameters and output the exact
+ * `scrypt:<N>:<r>:<p>:<saltHex>:<hashHex>` string that auth-config parses.
+ */
+export function hashPassword(password: string): string {
+  const { N, r, p } = PASSWORD_HASH_PARAMS;
+  const salt = randomBytes(PASSWORD_HASH_SALT_BYTES);
+  const hash = scryptSync(password, salt, PASSWORD_HASH_KEY_BYTES, {
+    N,
+    r,
+    p,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return `scrypt:${N}:${r}:${p}:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+/**
+ * Verify a password against a raw hash string without loading auth config, so it
+ * works when the session secret is absent (e.g. the password CLI).
+ * A malformed hash simply does not match.
+ */
+export function verifyPasswordHash(password: string, rawHash: string): boolean {
+  try {
+    return matchesPasswordHash(password, parsePasswordHash(rawHash));
+  } catch {
+    return false;
+  }
+}
+
+function sessionMac(expires: string, secret: string): string {
+  return createHmac("sha256", secret).update(expires).digest("hex");
+}
+
+/** Cookie value: v1.<expEpochSeconds>.<hmacSha256HexOfExp> */
+export function signSession(nowMs = Date.now()): string {
+  const { sessionDays, sessionSecret } = getActiveAuthConfig();
+  const expires = Math.floor(nowMs / 1000) + sessionDays * 86_400;
+  return `v1.${expires}.${sessionMac(String(expires), sessionSecret)}`;
+}
+
+export function verifySession(value: string | null | undefined, nowMs = Date.now()): boolean {
+  if (!value) return false;
+
+  const parts = value.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return false;
+
+  const [, expiresRaw, macHex] = parts;
+  if (!/^\d+$/.test(expiresRaw) || !/^[0-9a-fA-F]{64}$/.test(macHex)) return false;
+
+  const expires = Number(expiresRaw);
+  if (!Number.isSafeInteger(expires) || expires <= Math.floor(nowMs / 1000)) return false;
+
+  const expected = Buffer.from(sessionMac(expiresRaw, getActiveAuthConfig().sessionSecret), "hex");
+  const actual = Buffer.from(macHex, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function requestCookie(request: Request, name: string): string | null {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return null;
+  const prefix = `${name}=`;
+  const pair = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  return pair ? pair.slice(prefix.length) : null;
+}
+
+function hostName(authority: string): string | null {
+  try {
+    const unbracketedIpv6 = /^[0-9a-f:]+$/i.test(authority) && authority.includes(":");
+    const normalizedAuthority = unbracketedIpv6 ? `[${authority}]` : authority;
+    const parsed = new URL(`http://${normalizedAuthority}`);
+    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
+    return parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return null;
+  }
+}
+
+function trustedAgentHost(request: Request): { host: URL; hostname: string } | null {
+  const authority = request.headers.get("host");
+  if (!authority) return null;
+  try {
+    const host = new URL(`http://${authority}`);
+    if (host.username || host.password || host.pathname !== "/" || host.search || host.hash) return null;
+    const hostname = hostName(authority);
+    if (!hostname) return null;
+    const configured = process.env.HEALTHVAULT_ALLOWED_HOSTS;
+    const allowed = (configured === undefined ? "localhost,127.0.0.1,::1" : configured)
+      .split(",")
+      .map((value) => hostName(value.trim()))
+      .filter((value): value is string => value !== null);
+    return allowed.includes(hostname) ? { host, hostname } : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrigin(request: Request, host: URL): boolean {
+  const origin = request.headers.get("origin");
+  if (origin === null) return true;
+  try {
+    const parsed = new URL(origin);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return false;
+    }
+    const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+    const protocol = forwardedProto === "http" || forwardedProto === "https"
+      ? `${forwardedProto}:`
+      : new URL(request.url).protocol;
+    return parsed.origin === `${protocol}//${host.host}`;
+  } catch {
+    return false;
+  }
+}
+
+function verifyAgentBearer(request: Request): boolean {
+  const raw = request.headers.get("authorization");
+  const match = raw?.match(/^Bearer ([^\s]+)$/i);
+  if (!match) return false;
+  const expected = getActiveAuthConfig().agentToken;
+  if (!expected) return false;
+  const actualBytes = Buffer.from(match[1]);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+/**
+ * CSRF defense for cookie-authenticated UI routes (settings, setup, password change). Unlike the
+ * agent API these must work from any configured Host — including a LAN IP — so this compares the
+ * Origin header with the request's own origin instead of the agent allowlist. SameSite=Lax cookies
+ * already stop cross-site credentialed writes; rejecting a mismatched Origin makes it explicit.
+ */
+export function crossOriginFailure(request: Request): { status: 403; error: string } | null {
+  const authority = request.headers.get("host");
+  let self: URL;
+  try {
+    if (authority) {
+      // Trust the request's own Host (LAN IP included), not a static allowlist; the session cookie
+      // is host-only, so a different Host cannot carry it. Bracket a bare IPv6 literal for URL.
+      const bareIpv6 = /^[0-9a-f:]+$/i.test(authority) && authority.includes(":");
+      self = new URL(`http://${bareIpv6 ? `[${authority}]` : authority}`);
+    } else {
+      self = new URL(request.url);
+    }
+  } catch {
+    return { status: 403, error: "invalid request URL" };
+  }
+  if (!sameOrigin(request, self)) return { status: 403, error: "cross-origin request rejected" };
+  return null;
+}
+
+/** Shared proxy and route-handler defense for the machine API. */
+export function agentRequestFailure(request: Request): { status: 401 | 403; error: string } | null {
+  const trusted = trustedAgentHost(request);
+  if (!trusted) return { status: 403, error: "untrusted host" };
+  if (!sameOrigin(request, trusted.host)) return { status: 403, error: "cross-origin request rejected" };
+
+  const session = requestCookie(request, SESSION_COOKIE);
+  if (verifySession(session) || verifyAgentBearer(request)) return null;
+  return { status: 401, error: "authentication required" };
+}
+
+export function sessionCookieOptions() {
+  const { sessionDays, cookieSecure } = getActiveAuthConfig();
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: cookieSecure,
+    maxAge: sessionDays * 86_400,
+  };
+}
+
+export function expiredSessionCookieOptions() {
+  const { cookieSecure } = getActiveAuthConfig();
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: cookieSecure,
+    maxAge: 0,
+  };
+}
+
+/** For server actions and routes that want to throw on missing auth. */
+export async function requireSession(): Promise<void> {
+  const { cookies } = await import("next/headers");
+  const store = await cookies();
+  if (!verifySession(store.get(SESSION_COOKIE)?.value)) {
+    throw new AuthenticationError();
+  }
+}
+
+/** For route handlers: returns a ready 401 response, or null when authenticated. */
+export async function requireSessionOr401(): Promise<Response | null> {
+  try {
+    await requireSession();
+    return null;
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return Response.json({ error: "authentication required" }, { status: 401 });
+    }
+    throw error;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Login throttling
+ * A single process-wide counter, matching the single-user model: 5 failures per 15 minutes.
+ * ------------------------------------------------------------------------------------------- */
+
+type LoginWindow = { failures: number; resetAt: number };
+
+let loginWindow: LoginWindow = { failures: 0, resetAt: 0 };
+
+function currentWindow(now: number): LoginWindow {
+  if (now >= loginWindow.resetAt) loginWindow = { failures: 0, resetAt: now + LOGIN_WINDOW_MS };
+  return loginWindow;
+}
+
+export function loginThrottled(nowMs = Date.now()): boolean {
+  return currentWindow(nowMs).failures >= MAX_LOGIN_FAILURES;
+}
+
+export function recordLoginFailure(nowMs = Date.now()): void {
+  const window = currentWindow(nowMs);
+  window.failures += 1;
+  // Never log the password or any secret.
+  console.error(
+    `[auth] failed login attempt ${window.failures}/${MAX_LOGIN_FAILURES} at ${new Date(nowMs).toISOString()}`,
+  );
+}
+
+export function clearLoginFailures(): void {
+  loginWindow = { failures: 0, resetAt: 0 };
+}

@@ -1,0 +1,115 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+auth.env
+*.token
+agent.token
+id_ed25519*
+id_rsa*
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!/.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local sqlite
+/data/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+
+# health exports, backups, and uploads
+Export.zip
+export.zip
+apple_health_export/
+export.xml
+export_cda.xml
+electrocardiograms/
+workout-routes/
+clinical-records/
+*.gpx
+*.pdf
+backups/
+uploads/
+
+# playwright-cli and test artifacts
+/.playwright-cli/
+playwright-report/
+test-results/
+
+# plugin build artifacts
+/plugins/*/dist/
+/plugins/*/coverage/
+/plugins/*/node_modules/
+
+# local scratch, plans, caches, temp files, logs
+.claude/
+.opencode/
+/PLAN.md
+/PLAN.*.md
+/NOTES.md
+/TODO.md
+/pinned/
+build-activity.log
+release-artifacts/
+/.cache/
+/tmp/
+__pycache__/
+*.pyc
+*.log
+*.bak

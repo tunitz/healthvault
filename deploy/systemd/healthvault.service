@@ -1,0 +1,33 @@
+[Unit]
+Description=HealthVault
+Documentation=https://github.com/tunitz/healthvault#readme
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/healthvault
+# bun may not be on PATH in non-interactive systemd shells.
+Environment=PATH=%h/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=PORT=3040
+Environment=HOSTNAME=0.0.0.0
+Environment=DATABASE_PATH=%h/healthvault/data/health.db
+# Replace 192.168.1.20 with your host's LAN IP or hostname.
+Environment=HEALTHVAULT_ALLOWED_HOSTS=localhost,127.0.0.1,::1,192.168.1.20
+# Single-user login credentials (0600, outside the repo). The app fails fast at boot if missing.
+EnvironmentFile=%h/.config/healthvault/auth.env
+# The agent API requires a bearer token or session. Keep loopback plus the exact LAN IP/name
+# used by browsers and remote MCP clients in the list above; do not override it in auth.env.
+# The database and backups hold health data: files created by the service stay owner-only.
+UMask=0077
+ExecStart=%h/.bun/bin/bun --bun node_modules/next/dist/bin/next start -H 0.0.0.0 -p 3040
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+# bun's Next server exits 143 on SIGTERM; treat an explicit stop as clean.
+SuccessExitStatus=143
+
+[Install]
+WantedBy=default.target
