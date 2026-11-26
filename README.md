@@ -589,14 +589,16 @@ private file at `~/.config/healthvault/agent.token`.
 
 ```bash
 cp .env.example .env && $EDITOR .env
-docker compose build                 # build healthvault:latest from the Dockerfile
-docker compose up -d                 # start (restart: always); http://localhost:3040
+docker compose pull                  # pull the latest image from ghcr.io/tunitz/healthvault
+docker compose up -d                 # start (restart: unless-stopped); http://localhost:3040
 docker compose logs -f healthvault   # follow logs
 docker compose ps                    # health status (healthcheck hits /api/health)
 docker compose down                  # stop and remove the container (data/ is kept)
+# Or build locally instead of pulling from GHCR:
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
-The container user is `1000:1000` in `docker-compose.yml`; it must match the owner of `./data`
+The container user is `1000:1000` in `compose.yaml`; it must match the owner of `./data`
 (check with `id -u` / `id -g`). If you change uid, `chown -R <uid>:<gid> data`.
 
 Backup (stop-free, SQLite WAL-safe copy via the sqlite CLI, or stop the container first):

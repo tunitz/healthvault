@@ -1,12 +1,23 @@
+# Docker build context exclusions
+.git
+**/.git
+.github
 node_modules
+**/node_modules
 .next
 data
-.git
 *.log
 tmp
 .env*
 *.db
 *.db-wal
 *.db-shm
+*.md
+docs
+deploy
+rust
 Dockerfile
+compose*.yaml
 docker-compose.yml
+release-please-config.json
+.release-please-manifest.json
