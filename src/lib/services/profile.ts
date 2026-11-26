@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { foods, profile, supplements } from "@/db/schema";
-import { DEFAULT_TIMEZONE } from "@/lib/day";
+import { resolveDefaultTimezone } from "@/lib/day";
 import { enumField, fail, jsonField, idField, numField, str, timezoneField } from "@/lib/validate";
 
 export type Profile = typeof profile.$inferSelect;
@@ -195,14 +195,14 @@ export function getProfile(): Profile {
   if (existing) return existing;
   const now = Date.now();
   db.insert(profile)
-    .values({ id: 1, timezone: DEFAULT_TIMEZONE, units: "metric", createdAtMs: now, updatedAtMs: now })
+    .values({ id: 1, timezone: resolveDefaultTimezone(), units: "metric", createdAtMs: now, updatedAtMs: now })
     .onConflictDoNothing()
     .run();
   return row()!;
 }
 
 export function getTimezone(): string {
-  return getProfile().timezone || DEFAULT_TIMEZONE;
+  return getProfile().timezone || resolveDefaultTimezone();
 }
 
 /** True when a profile has enough for age/height-based suggestions. */

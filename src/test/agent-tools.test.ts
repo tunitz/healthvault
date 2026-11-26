@@ -1100,61 +1100,73 @@ describe("explicit food templates (no name inference)", () => {
 
 describe("eatenAt and day consistency", () => {
   test("a day that contradicts eatenAt is rejected on log and on update", () => {
-    expectValidation(
-      () =>
-        nutrition.logMeal({
-          day: "2026-11-16",
-          meal: "lunch",
-          eatenAt: "2026-11-17T08:00:00+08:00",
-          entries: [{ name: "Mismatched", grams: 10, kcal: 1 }],
-        }),
-      400,
-      /falls on 2026-11-17/,
-    );
-    expectValidation(
-      () =>
-        nutrition.logRecipe({
-          recipeId: recipe.id,
-          day: "2026-11-16",
-          meal: "lunch",
-          servingNo: 9,
-          eatenAt: "2026-11-17T08:00:00+08:00",
-        }),
-      400,
-      /falls on 2026-11-17/,
-    );
+    const prevTz = profileService.getProfile().timezone;
+    profileService.updateProfile({ timezone: "Asia/Shanghai" });
+    try {
+      expectValidation(
+        () =>
+          nutrition.logMeal({
+            day: "2026-11-16",
+            meal: "lunch",
+            eatenAt: "2026-11-17T08:00:00+08:00",
+            entries: [{ name: "Mismatched", grams: 10, kcal: 1 }],
+          }),
+        400,
+        /falls on 2026-11-17/,
+      );
+      expectValidation(
+        () =>
+          nutrition.logRecipe({
+            recipeId: recipe.id,
+            day: "2026-11-16",
+            meal: "lunch",
+            servingNo: 9,
+            eatenAt: "2026-11-17T08:00:00+08:00",
+          }),
+        400,
+        /falls on 2026-11-17/,
+      );
+    } finally {
+      profileService.updateProfile({ timezone: prevTz });
+    }
   });
 
   test("moving an entry to another day keeps its wall-clock time", () => {
-    const at = localTimeMs("2026-11-16", "09:30", "Asia/Shanghai");
-    const { entries } = nutrition.logMeal({
-      meal: "breakfast",
-      eatenAt: at,
-      entries: [{ name: "Clock test", grams: 50, kcal: 10 }],
-    });
-    expect(entries[0].day).toBe("2026-11-16");
-    expect(formatClock(entries[0].eatenAtMs, "Asia/Shanghai")).toBe("09:30");
+    const prevTz = profileService.getProfile().timezone;
+    profileService.updateProfile({ timezone: "Asia/Shanghai" });
+    try {
+      const at = localTimeMs("2026-11-16", "09:30", "Asia/Shanghai");
+      const { entries } = nutrition.logMeal({
+        meal: "breakfast",
+        eatenAt: at,
+        entries: [{ name: "Clock test", grams: 50, kcal: 10 }],
+      });
+      expect(entries[0].day).toBe("2026-11-16");
+      expect(formatClock(entries[0].eatenAtMs, "Asia/Shanghai")).toBe("09:30");
 
-    const moved = nutrition.updateEntry(entries[0].id, { day: "2026-11-18" });
-    expect(moved.day).toBe("2026-11-18");
-    expect(formatClock(moved.eatenAtMs, "Asia/Shanghai")).toBe("09:30");
+      const moved = nutrition.updateEntry(entries[0].id, { day: "2026-11-18" });
+      expect(moved.day).toBe("2026-11-18");
+      expect(formatClock(moved.eatenAtMs, "Asia/Shanghai")).toBe("09:30");
 
-    expectValidation(
-      () =>
-        nutrition.updateEntry(entries[0].id, {
-          day: "2026-11-19",
-          eatenAt: "2026-11-20T09:30:00+08:00",
-        }),
-      400,
-      /falls on 2026-11-20/,
-    );
+      expectValidation(
+        () =>
+          nutrition.updateEntry(entries[0].id, {
+            day: "2026-11-19",
+            eatenAt: "2026-11-20T09:30:00+08:00",
+          }),
+        400,
+        /falls on 2026-11-20/,
+      );
 
-    const matched = nutrition.updateEntry(entries[0].id, {
-      day: "2026-11-21",
-      eatenAt: "2026-11-21T07:45:00+08:00",
-    });
-    expect(matched.day).toBe("2026-11-21");
-    expect(formatClock(matched.eatenAtMs, "Asia/Shanghai")).toBe("07:45");
+      const matched = nutrition.updateEntry(entries[0].id, {
+        day: "2026-11-21",
+        eatenAt: "2026-11-21T07:45:00+08:00",
+      });
+      expect(matched.day).toBe("2026-11-21");
+      expect(formatClock(matched.eatenAtMs, "Asia/Shanghai")).toBe("07:45");
+    } finally {
+      profileService.updateProfile({ timezone: prevTz });
+    }
   });
 });
 

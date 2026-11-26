@@ -1,15 +1,14 @@
 /**
  * Local-calendar-day helpers.
  *
- * Apple writes each record's `day` in the export's local time (+08:00 here), but SQLite's
- * `date('now')` is UTC. Mixing the two shifts the "last 30 days" window by 8 hours and makes
- * today's rows disappear at the wrong moment. Every day boundary in the app goes through
- * these helpers with the profile's IANA timezone instead.
+ * Apple writes each record's `day` in the export's local time, whereas SQLite's `date('now')`
+ * is UTC. Every day boundary in the app goes through these helpers with the profile's IANA
+ * timezone instead so rolling windows stay consistent.
  *
  * This module is deliberately dependency-free so client components can import it.
  */
 
-export const DEFAULT_TIMEZONE = "Asia/Shanghai";
+export const DEFAULT_TIMEZONE = "UTC";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -40,6 +39,15 @@ export function isValidTimezone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Resolve default IANA timezone from HEALTHVAULT_DEFAULT_TIMEZONE / TZ, falling back to UTC. */
+export function resolveDefaultTimezone(): string {
+  if (typeof process !== "undefined") {
+    const candidate = (process.env.HEALTHVAULT_DEFAULT_TIMEZONE || process.env.TZ || "").trim();
+    if (candidate && isValidTimezone(candidate)) return candidate;
+  }
+  return DEFAULT_TIMEZONE;
 }
 
 type Parts = { year: number; month: number; day: number; hour: number; minute: number; second: number };

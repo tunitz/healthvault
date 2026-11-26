@@ -64,7 +64,7 @@ export function dayField(value: unknown, name = "day", fallback?: string): strin
 }
 
 export function timezoneField(value: unknown): string {
-  if (typeof value !== "string" || !isValidTimezone(value)) fail("timezone must be a valid IANA zone (e.g. Asia/Shanghai)");
+  if (typeof value !== "string" || !isValidTimezone(value)) fail("timezone must be a valid IANA zone (e.g. UTC or America/New_York)");
   return value;
 }
 

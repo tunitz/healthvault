@@ -483,7 +483,7 @@ export function createToolDefinitions(client: HealthVaultClient): ToolDefinition
           },
           sex: { type: ["string", "null"], enum: ["male", "female", "other", null] },
           heightCm: { type: ["number", "null"], minimum: 50, maximum: 260 },
-          timezone: { type: "string", description: "IANA timezone, e.g. Asia/Shanghai" },
+          timezone: { type: "string", description: "IANA timezone, e.g. UTC or America/New_York" },
           units: { type: "string", enum: ["metric", "imperial"] },
           workSchedule: {
             type: ["object", "null"],

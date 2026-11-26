@@ -83,7 +83,7 @@ export const profile = sqliteTable("profile", {
   birthDate: text("birth_date"), // YYYY-MM-DD
   sex: text("sex"), // male | female | other
   heightCm: real("height_cm"),
-  timezone: text("timezone").notNull().default("Asia/Shanghai"), // IANA
+  timezone: text("timezone").notNull().default("UTC"), // IANA
   units: text("units").notNull().default("metric"), // metric | imperial
   workScheduleJson: text("work_schedule_json"), // { days: [{ weekday, start, end }], note }
   goalWeightKg: real("goal_weight_kg"),

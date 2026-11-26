@@ -11,9 +11,16 @@ const nextConfig: NextConfig = {
     // the route's own 200 MB zip cap for the multipart envelope.
     proxyClientMaxBodySize: "220mb",
   },
-  // Next 16 blocks dev resources for origins it doesn't know; the smoke tests and
-  // browser checks hit 127.0.0.1 instead of localhost.
-  allowedDevOrigins: ["127.0.0.1", "localhost", "192.168.31.10", "100.67.153.70"],
+  // Next 16 blocks dev resources for origins it doesn't know; allow loopback and any
+  // comma-separated hosts configured via HEALTHVAULT_DEV_ORIGINS.
+  allowedDevOrigins: [
+    "127.0.0.1",
+    "localhost",
+    ...(process.env.HEALTHVAULT_DEV_ORIGINS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  ],
   async headers() {
     return [
       {
