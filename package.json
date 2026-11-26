@@ -1,6 +1,6 @@
 {
   "name": "healthvault",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Self-hosted personal health, nutrition, training, and Apple Health analytics dashboard with an MCP server.",
   "license": "MIT",
