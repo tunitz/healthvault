@@ -1,14 +1,14 @@
 [Unit]
 Description=HealthVault database backup (WAL-safe, integrity-checked)
-Documentation=file:///home/tunitz/projects/healthvault/deploy/README.md
+Documentation=https://github.com/tunitz/healthvault/blob/main/deploy/README.md
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/tunitz/projects/healthvault
-# bun is not on PATH in non-interactive shells (see healthvault.service).
-Environment=PATH=/home/tunitz/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
-Environment=DATABASE_PATH=/home/tunitz/projects/healthvault/data/health.db
+WorkingDirectory=%h/healthvault
+# bun may not be on PATH in non-interactive systemd shells (see healthvault.service).
+Environment=PATH=%h/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
+Environment=DATABASE_PATH=%h/healthvault/data/health.db
 UMask=0077
-ExecStart=/home/tunitz/.bun/bin/bun scripts/backup-db.ts
+ExecStart=%h/.bun/bin/bun scripts/backup-db.ts
 # 14-day retention: prune older backups (mode 600 is set by the script).
-ExecStartPost=/usr/bin/find /home/tunitz/projects/healthvault/data/backups -name 'health-*.db' -type f -mtime +14 -delete
+ExecStartPost=/usr/bin/find %h/healthvault/data/backups -name 'health-*.db' -type f -mtime +14 -delete

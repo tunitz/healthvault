@@ -20,13 +20,15 @@ const db = new Database(path);
 db.pragma("journal_mode = WAL");
 const now = Date.now();
 const DAY = 86_400_000;
-const end = Date.UTC(2026, 10, 17);
+const parsedEnd = process.env.SEED_END_MS ? Number(process.env.SEED_END_MS) : now;
+const endDate = new Date(Number.isFinite(parsedEnd) ? parsedEnd : now);
+const end = Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate());
 const dayStr = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 const run = db.transaction(() => {
   db.prepare(`INSERT OR IGNORE INTO profile
     (id, name, birth_date, sex, height_cm, timezone, units, goal_weight_kg, goal_json, created_at_ms, updated_at_ms)
-    VALUES (1, 'Test User', '1995-04-12', 'male', 172, 'Asia/Shanghai', 'metric', 68,
+    VALUES (1, 'Alex', '1994-05-15', 'male', 175, 'UTC', 'metric', 70,
             '{"type":"run5k","targetSeconds":1680}', ?, ?)`).run(now, now);
 
   db.prepare(`INSERT OR IGNORE INTO nutrition_targets
@@ -87,10 +89,42 @@ const run = db.transaction(() => {
     (name, serving_grams, kcal_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g,
      fibre_per_100g, sodium_per_100g, state, source, created_at_ms, updated_at_ms)
     VALUES (?, 100, ?, ?, ?, ?, ?, ?, 'raw', 'usda', ?, ?)`);
-  food.run("Ampalaya, raw", 17, 1, 3.7, 0.2, 1.2, 5, now, now);
-  food.run("Jumbo egg", 143, 12.6, 0.7, 9.5, 0, 142, now, now);
-  food.run("Garlic", 149, 6.4, 33, 0.5, 2.1, 17, now, now);
+  food.run("Spinach, raw", 23, 2.9, 3.6, 0.4, 2.2, 79, now, now);
+  food.run("Chicken breast, raw", 120, 22.5, 0, 2.6, 0, 45, now, now);
+  food.run("Rolled oats, dry", 389, 16.9, 66.3, 6.9, 10.6, 2, now, now);
+  food.run("Whole egg", 143, 12.6, 0.7, 9.5, 0, 142, now, now);
   food.run("Whey protein", 400, 80, 8, 6, 0, 120, now, now);
+
+  const foodRows = db.prepare("SELECT id, name FROM foods ORDER BY id").all() as { id: number; name: string }[];
+  const foodId = (name: string) => foodRows.find((f) => f.name === name)?.id ?? null;
+  const mealLog = db.prepare(`INSERT OR IGNORE INTO food_log
+    (day, meal, eaten_at_ms, food_id, name, grams, kcal, protein_g, carbs_g, fat_g, fibre_g, sodium_mg, estimated, weight_source, macro_source, created_at_ms, updated_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'weighed', 'usda', ?, ?)`);
+  for (let i = 0; i < 7; i++) {
+    const dayMs = end - i * DAY;
+    const day = dayStr(dayMs);
+    mealLog.run(day, "breakfast", dayMs + 8 * 3_600_000, foodId("Rolled oats, dry"), "Rolled oats, dry", 80, 311, 13.5, 53.0, 5.5, 8.5, 2, now, now);
+    mealLog.run(day, "breakfast", dayMs + 8 * 3_600_000 + 60_000, foodId("Whole egg"), "Whole egg", 180, 257, 22.7, 1.3, 17.1, 0, 256, now, now);
+    mealLog.run(day, "lunch", dayMs + 13 * 3_600_000, foodId("Chicken breast, raw"), "Chicken breast, raw", 220, 264, 49.5, 0, 5.7, 0, 99, now, now);
+    mealLog.run(day, "lunch", dayMs + 13 * 3_600_000 + 60_000, foodId("Spinach, raw"), "Spinach, raw", 150, 35, 4.4, 5.4, 0.6, 3.3, 119, now, now);
+    mealLog.run(day, "snack", dayMs + 17 * 3_600_000, foodId("Whey protein"), "Whey protein", 35, 140, 28, 2.8, 2.1, 0, 42, now, now);
+  }
+
+  const plan = db.prepare(`INSERT OR IGNORE INTO planned_sessions
+    (day, kind, intent, title, target_json, status, block_start, week_no, created_at_ms, updated_at_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const blockStart = dayStr(end - 7 * DAY);
+  plan.run(dayStr(end - 3 * DAY), "run", "easy", "Easy 5K aerobic run", '{"distanceKm":5,"paceMinPerKm":6.2}', "done", blockStart, 1, now, now);
+  plan.run(dayStr(end - DAY), "strength", "strength", "Upper body & core", '{"focus":"Push/Pull"}', "done", blockStart, 1, now, now);
+  plan.run(dayStr(end), "run", "quality", "Tempo intervals 4x4 min", '{"distanceKm":6,"paceMinPerKm":5.5}', "planned", blockStart, 1, now, now);
+  plan.run(dayStr(end + 2 * DAY), "run", "long_easy", "Weekend long run", '{"distanceKm":8,"paceMinPerKm":6.4}', "planned", blockStart, 1, now, now);
+
+  const strength = db.prepare(`INSERT OR IGNORE INTO strength_sets
+    (day, exercise, set_no, reps, load_kg, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)`);
+  for (let s = 1; s <= 3; s++) {
+    strength.run(dayStr(end - DAY), "Barbell Squat", s, 8, 80, now);
+    strength.run(dayStr(end - DAY), "Bench Press", s, 8, 65, now);
+  }
 
   const supp = db.prepare(`INSERT OR IGNORE INTO supplements
     (name, dose, unit, schedule_json, active, created_at_ms, updated_at_ms)

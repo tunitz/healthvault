@@ -22,7 +22,19 @@
 
 # misc
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
 
 # debug
 npm-debug.log*
@@ -43,19 +55,33 @@ next-env.d.ts
 
 # local sqlite
 /data/
+*.db
+*.sqlite
+*.sqlite3
 *.db-wal
 *.db-shm
 
-# playwright-cli session artifacts
+# playwright-cli and test artifacts
 /.playwright-cli/
+playwright-report/
+test-results/
 
 # plugin build artifacts
 /plugins/*/dist/
 /plugins/*/coverage/
 /plugins/*/node_modules/
 
-# caches, temp files, logs
+# local scratch, plans, caches, temp files, logs
+/PLAN.md
+/PLAN.*.md
+/NOTES.md
+/TODO.md
+/pinned/
+build-activity.log
+release-artifacts/
 /.cache/
 /tmp/
+__pycache__/
+*.pyc
 *.log
 *.bak

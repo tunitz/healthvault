@@ -89,4 +89,25 @@ describe("Phase 1 data integrity fixes", () => {
     const fk = sqlite.pragma("foreign_keys", { simple: true });
     expect(fk).toBe(1);
   });
+
+  test("resolveDefaultTimezone uses HEALTHVAULT_DEFAULT_TIMEZONE when valid and falls back to UTC", async () => {
+    const { DEFAULT_TIMEZONE, resolveDefaultTimezone } = await import("@/lib/day");
+    expect(DEFAULT_TIMEZONE).toBe("UTC");
+    const prevHv = process.env.HEALTHVAULT_DEFAULT_TIMEZONE;
+    const prevTz = process.env.TZ;
+    try {
+      delete process.env.HEALTHVAULT_DEFAULT_TIMEZONE;
+      delete process.env.TZ;
+      expect(resolveDefaultTimezone()).toBe("UTC");
+      process.env.HEALTHVAULT_DEFAULT_TIMEZONE = "America/New_York";
+      expect(resolveDefaultTimezone()).toBe("America/New_York");
+      process.env.HEALTHVAULT_DEFAULT_TIMEZONE = "Not/A_Zone";
+      expect(resolveDefaultTimezone()).toBe("UTC");
+    } finally {
+      if (prevHv === undefined) delete process.env.HEALTHVAULT_DEFAULT_TIMEZONE;
+      else process.env.HEALTHVAULT_DEFAULT_TIMEZONE = prevHv;
+      if (prevTz === undefined) delete process.env.TZ;
+      else process.env.TZ = prevTz;
+    }
+  });
 });

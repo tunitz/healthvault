@@ -1,6 +1,6 @@
 {
   "schema": "rust-anything/bridge@1",
-  "root": "/home/tunitz/Projects/healthvault",
+  "root": ".",
   "unit": "src/lib/xml.ts",
   "language": "ts",
   "kind": "napi",
